@@ -1,0 +1,6 @@
+{
+  "name": "CodeGauge",
+  "description": "Analyze any public GitHub repository for exact lines of code, language breakdown including APL (.apl), file filtering, and PDF reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="108" fill="#0B0F17" />
+  <rect x="24" y="24" width="464" height="464" rx="90" stroke="#1E293B" stroke-width="8" />
+  <!-- Code Gauge Ring -->
+  <path
+    d="M 142 332 A 144 144 0 1 1 370 332"
+    stroke="#1E293B"
+    stroke-width="28"
+    stroke-linecap="round"
+  />
+  <path
+    d="M 142 332 A 144 144 0 0 1 334 134"
+    stroke="#38BDF8"
+    stroke-width="28"
+    stroke-linecap="round"
+  />
+  <path
+    d="M 358 158 A 144 144 0 0 1 370 332"
+    stroke="#10B981"
+    stroke-width="28"
+    stroke-linecap="round"
+  />
+  <!-- Code Brackets </> -->
+  <path
+    d="M 218 224 L 182 260 L 218 296"
+    stroke="#F1F5F9"
+    stroke-width="22"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M 294 224 L 330 260 L 294 296"
+    stroke="#F1F5F9"
+    stroke-width="22"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M 270 212 L 242 308"
+    stroke="#38BDF8"
+    stroke-width="20"
+    stroke-linecap="round"
+  />
+</svg>
