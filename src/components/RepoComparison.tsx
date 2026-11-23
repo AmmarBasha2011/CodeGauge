@@ -55,6 +55,121 @@ interface HealthRadarPoint {
 
 type RadarMode = 'percentage' | 'raw';
 type HeatmapFocus = 'all' | 'size' | 'complexity';
+type FileTypeMetric = 'percentage' | 'codeLines' | 'files';
+type FileCategoryKey = 'source' | 'tests' | 'docs' | 'config' | 'other';
+
+interface FileCategoryBucket {
+  files: number;
+  codeLines: number;
+  lines: number;
+}
+
+const FILE_CATEGORY_COLORS: Record<FileCategoryKey, string> = {
+  source: '#38BDF8',
+  tests: '#10B981',
+  docs: '#F59E0B',
+  config: '#A78BFA',
+  other: '#64748B',
+};
+
+const TEST_DIR_RE =
+  /(?:^|\/)(?:test|tests|__tests__|spec|specs|e2e|integration|unit|cypress|playwright|__mocks__|fixtures|testdata)\//i;
+const TEST_FILE_RE =
+  /(?:\.(?:test|spec|e2e|cy|stories)\.[^.]+$|_test\.(?:go|py|rs|rb|c|cpp|ts|js|tsx|jsx)$|^test_.*\.(?:py|rb|sh|c|cpp)$|tests?\.(?:java|kt|cs|scala|swift)$)/i;
+const DOC_DIR_RE = /(?:^|\/)(?:docs?|documentation|wiki|guides?)\//i;
+const DOC_FILE_RE =
+  /^(?:readme|license|licence|changelog|changes|history|contributing|code_of_conduct|security|authors|contributors|notice|copying|maintainers)(?:\..*)?$/i;
+const DOC_LANGUAGES = new Set([
+  'Markdown',
+  'MDX',
+  'reStructuredText',
+]);
+const CONFIG_DIR_RE =
+  /(?:^|\/)(?:\.github|\.gitlab|\.circleci|\.vscode|\.husky|configs?)\//i;
+const CONFIG_FILE_RE =
+  /^(?:package\.json|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|tsconfig(?:\.[^.]+)?\.json|jsconfig\.json|vite\.config\.[^.]+|webpack\.config\.[^.]+|rollup\.config\.[^.]+|eslint.*|\.eslintrc.*|prettier.*|\.prettierrc.*|babel\.config\.[^.]+|\.babelrc.*|cargo\.toml|cargo\.lock|go\.mod|go\.sum|pyproject\.toml|setup\.py|setup\.cfg|requirements[^/]*\.txt|gemfile(?:\.lock)?|pom\.xml|build\.gradle(?:\.kts)?|makefile|dockerfile(?:\.[^/]+)?|docker-compose[^/]*\.ya?ml|\.env(?:\.[^/]+)?)$/i;
+const CONFIG_LANGUAGES = new Set([
+  'JSON',
+  'YAML',
+  'TOML',
+  'INI',
+  'Config',
+  'EditorConfig',
+  'Git Config',
+  'Ignore List',
+  'Dockerfile',
+  'Makefile',
+  'CMake',
+  'Just',
+  'Nix',
+  'HCL',
+  'XML',
+  'Properties',
+]);
+const MARKUP_OTHER_LANGUAGES = new Set([
+  'CSS',
+  'SCSS',
+  'Sass',
+  'Less',
+  'HTML',
+  'SVG',
+  'CSV',
+  'Text',
+  'Other',
+]);
+
+function classifyRepoFile(file: AnalyzedFile): FileCategoryKey {
+  const normalizedPath = file.path.replace(/\\/g, '/');
+  const fileName = file.name;
+
+  if (TEST_DIR_RE.test(normalizedPath) || TEST_FILE_RE.test(fileName)) {
+    return 'tests';
+  }
+
+  if (
+    DOC_LANGUAGES.has(file.language) ||
+    DOC_FILE_RE.test(fileName) ||
+    (DOC_DIR_RE.test(normalizedPath) &&
+      (file.language === 'Text' || file.language === 'HTML' || file.language === 'Other'))
+  ) {
+    return 'docs';
+  }
+
+  if (
+    CONFIG_LANGUAGES.has(file.language) ||
+    CONFIG_FILE_RE.test(fileName) ||
+    CONFIG_DIR_RE.test(normalizedPath)
+  ) {
+    return 'config';
+  }
+
+  if (MARKUP_OTHER_LANGUAGES.has(file.language)) {
+    return 'other';
+  }
+
+  return 'source';
+}
+
+function summarizeFileCategories(
+  files: AnalyzedFile[]
+): Record<FileCategoryKey, FileCategoryBucket> {
+  const totals: Record<FileCategoryKey, FileCategoryBucket> = {
+    source: { files: 0, codeLines: 0, lines: 0 },
+    tests: { files: 0, codeLines: 0, lines: 0 },
+    docs: { files: 0, codeLines: 0, lines: 0 },
+    config: { files: 0, codeLines: 0, lines: 0 },
+    other: { files: 0, codeLines: 0, lines: 0 },
+  };
+
+  for (const file of files) {
+    const key = classifyRepoFile(file);
+    totals[key].files += 1;
+    totals[key].codeLines += file.codeLines;
+    totals[key].lines += file.lines;
+  }
+
+  return totals;
+}
 
 interface HeatmapCellInfo {
   file: AnalyzedFile;
@@ -164,6 +279,8 @@ export function RepoComparison({
     const simplicityB = computeCodeSimplicity(repoB);
     const densityA = computeCodeDensity(repoA);
     const densityB = computeCodeDensity(repoB);
+    const compScoreA = healthA.complexity?.score ?? simplicityA.score;
+    const compScoreB = healthB.complexity?.score ?? simplicityB.score;
 
     return [
       {
@@ -175,8 +292,8 @@ export function RepoComparison({
       },
       {
         axis: t.radarAxisComments,
-        scoreA: Math.round((healthA.commentScore / 50) * 100),
-        scoreB: Math.round((healthB.commentScore / 50) * 100),
+        scoreA: Math.round((healthA.commentScore / 35) * 100),
+        scoreB: Math.round((healthB.commentScore / 35) * 100),
         rawA: healthA.commentDataAvailable
           ? `${healthA.commentRatioPct}%`
           : t.unavailableLabel,
@@ -186,21 +303,25 @@ export function RepoComparison({
       },
       {
         axis: t.radarAxisFileSize,
-        scoreA: Math.round((healthA.fileSizeScore / 50) * 100),
-        scoreB: Math.round((healthB.fileSizeScore / 50) * 100),
+        scoreA: Math.round((healthA.fileSizeScore / 35) * 100),
+        scoreB: Math.round((healthB.fileSizeScore / 35) * 100),
         rawA: `${healthA.healthySizeFilesPct}% ≤ 50 KB`,
         rawB: `${healthB.healthySizeFilesPct}% ≤ 50 KB`,
       },
       {
-        axis: t.radarAxisComplexity,
-        scoreA: simplicityA.score,
-        scoreB: simplicityB.score,
-        rawA: formatMessage(t.radarLinesPerFileUnit, {
-          lines: formatNumber(simplicityA.avgLinesPerFile, lang),
-        }),
-        rawB: formatMessage(t.radarLinesPerFileUnit, {
-          lines: formatNumber(simplicityB.avgLinesPerFile, lang),
-        }),
+        axis: t.healthComplexityScoreLabel,
+        scoreA: compScoreA,
+        scoreB: compScoreB,
+        rawA: healthA.complexity
+          ? `M = ${formatNumber(healthA.complexity.avgComplexity, lang)}`
+          : formatMessage(t.radarLinesPerFileUnit, {
+              lines: formatNumber(simplicityA.avgLinesPerFile, lang),
+            }),
+        rawB: healthB.complexity
+          ? `M = ${formatNumber(healthB.complexity.avgComplexity, lang)}`
+          : formatMessage(t.radarLinesPerFileUnit, {
+              lines: formatNumber(simplicityB.avgLinesPerFile, lang),
+            }),
       },
       {
         axis: t.radarAxisDensity,
@@ -275,6 +396,99 @@ export function RepoComparison({
   }, [radarMode, rawRadarData]);
 
   const [heatmapFocus, setHeatmapFocus] = useState<HeatmapFocus>('all');
+  const [fileTypeMetric, setFileTypeMetric] =
+    useState<FileTypeMetric>('percentage');
+
+  const fileTypeSummary = useMemo(() => {
+    const catsA = summarizeFileCategories(repoA.files);
+    const catsB = summarizeFileCategories(repoB.files);
+
+    const categories: Array<{
+      key: FileCategoryKey;
+      label: string;
+      color: string;
+    }> = [
+      { key: 'source', label: t.fileCategorySource, color: FILE_CATEGORY_COLORS.source },
+      { key: 'tests', label: t.fileCategoryTests, color: FILE_CATEGORY_COLORS.tests },
+      { key: 'docs', label: t.fileCategoryDocs, color: FILE_CATEGORY_COLORS.docs },
+      { key: 'config', label: t.fileCategoryConfig, color: FILE_CATEGORY_COLORS.config },
+      { key: 'other', label: t.fileCategoryOther, color: FILE_CATEGORY_COLORS.other },
+    ];
+
+    const sumMetric = (
+      cats: Record<FileCategoryKey, FileCategoryBucket>,
+      metric: 'codeLines' | 'files'
+    ) =>
+      categories.reduce((acc, c) => acc + cats[c.key][metric], 0);
+
+    const totalCodeA = Math.max(1, sumMetric(catsA, 'codeLines'));
+    const totalCodeB = Math.max(1, sumMetric(catsB, 'codeLines'));
+    const totalFilesA = Math.max(1, sumMetric(catsA, 'files'));
+    const totalFilesB = Math.max(1, sumMetric(catsB, 'files'));
+
+    const buildRepoRow = (
+      repoName: string,
+      cats: Record<FileCategoryKey, FileCategoryBucket>,
+      totalCode: number,
+      totalFiles: number
+    ) => {
+      const row: Record<string, string | number> = { repoName };
+      for (const cat of categories) {
+        if (fileTypeMetric === 'files') {
+          row[cat.key] = cats[cat.key].files;
+        } else if (fileTypeMetric === 'codeLines') {
+          row[cat.key] = cats[cat.key].codeLines;
+        } else {
+          const pct = (cats[cat.key].codeLines / totalCode) * 100;
+          row[cat.key] = Number(pct.toFixed(2));
+        }
+        row[`${cat.key}_files`] = cats[cat.key].files;
+        row[`${cat.key}_codeLines`] = cats[cat.key].codeLines;
+        row[`${cat.key}_pct`] = Number(
+          ((cats[cat.key].codeLines / totalCode) * 100).toFixed(1)
+        );
+        row[`${cat.key}_filesPct`] = Number(
+          ((cats[cat.key].files / totalFiles) * 100).toFixed(1)
+        );
+      }
+      return row;
+    };
+
+    const chartRows = [
+      buildRepoRow(repoA.repository.fullName, catsA, totalCodeA, totalFilesA),
+      buildRepoRow(repoB.repository.fullName, catsB, totalCodeB, totalFilesB),
+    ];
+
+    const tableRows = categories.map((cat) => {
+      const a = catsA[cat.key];
+      const b = catsB[cat.key];
+      const pctA = Number(((a.codeLines / totalCodeA) * 100).toFixed(1));
+      const pctB = Number(((b.codeLines / totalCodeB) * 100).toFixed(1));
+      const filesPctA = Number(((a.files / totalFilesA) * 100).toFixed(1));
+      const filesPctB = Number(((b.files / totalFilesB) * 100).toFixed(1));
+      return {
+        ...cat,
+        aFiles: a.files,
+        aCodeLines: a.codeLines,
+        aPct: pctA,
+        aFilesPct: filesPctA,
+        bFiles: b.files,
+        bCodeLines: b.codeLines,
+        bPct: pctB,
+        bFilesPct: filesPctB,
+        diffPct: Number((pctA - pctB).toFixed(1)),
+      };
+    });
+
+    return { categories, chartRows, tableRows };
+  }, [
+    repoA.files,
+    repoA.repository.fullName,
+    repoB.files,
+    repoB.repository.fullName,
+    fileTypeMetric,
+    t,
+  ]);
 
   const heatmapRows = useMemo<HeatmapRow[]>(() => {
     let maxBytes = 1;
@@ -619,6 +833,228 @@ export function RepoComparison({
           </tbody>
         </table>
       </div>
+
+      {/* File Type Distribution Summary (Stacked Bar Chart) */}
+      {(repoA.files.length > 0 || repoB.files.length > 0) && (
+        <div className="rounded-xl border border-slate-800/80 bg-[#111827] p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-100">
+                {t.fileTypeSummaryTitle}
+              </h3>
+              <p className="mt-0.5 text-xs text-slate-400">
+                {t.fileTypeSummarySubtitle}
+              </p>
+            </div>
+
+            <div
+              role="group"
+              aria-label={t.fileTypeSummaryTitle}
+              className="inline-flex self-start sm:self-auto items-center rounded-lg border border-slate-800 bg-[#0B0F17] p-1 shrink-0"
+            >
+              {(
+                [
+                  { id: 'percentage', label: t.fileTypeMetricShare },
+                  { id: 'codeLines', label: t.fileTypeMetricLines },
+                  { id: 'files', label: t.fileTypeMetricFiles },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setFileTypeMetric(tab.id)}
+                  aria-pressed={fileTypeMetric === tab.id}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    fileTypeMetric === tab.id
+                      ? 'bg-sky-500/20 text-sky-300'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div dir="ltr" className="mt-4 h-52 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={fileTypeSummary.chartRows}
+                layout="vertical"
+                margin={{ top: 8, right: 18, left: 8, bottom: 4 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="#1E293B"
+                  horizontal={false}
+                />
+                <XAxis
+                  type="number"
+                  domain={fileTypeMetric === 'percentage' ? [0, 100] : [0, 'auto']}
+                  allowDataOverflow={fileTypeMetric === 'percentage'}
+                  tick={{ fill: '#94A3B8', fontSize: 11 }}
+                  axisLine={{ stroke: '#334155' }}
+                  tickLine={false}
+                  tickFormatter={(val: number) =>
+                    fileTypeMetric === 'percentage'
+                      ? `${Math.round(val)}%`
+                      : formatCompactAxis(val)
+                  }
+                />
+                <YAxis
+                  type="category"
+                  dataKey="repoName"
+                  width={136}
+                  tick={{ fill: '#E2E8F0', fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(val: string) =>
+                    val.length > 18 ? `${val.slice(0, 17)}…` : val
+                  }
+                />
+                <Tooltip
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload || payload.length === 0) return null;
+                    const row = payload[0].payload as Record<string, string | number>;
+                    return (
+                      <div
+                        dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                        className="rounded-lg border border-slate-700 bg-[#0B0F17] px-3.5 py-2.5 text-xs shadow-lg"
+                      >
+                        <div className="mb-2 font-mono font-semibold text-slate-100">
+                          {String(row.repoName)}
+                        </div>
+                        <div className="space-y-1.5 tabular-nums">
+                          {fileTypeSummary.categories.map((cat) => {
+                            const codeVal = Number(row[`${cat.key}_codeLines`] ?? 0);
+                            const filesVal = Number(row[`${cat.key}_files`] ?? 0);
+                            const pctVal = Number(
+                              (fileTypeMetric === 'files'
+                                ? row[`${cat.key}_filesPct`]
+                                : row[`${cat.key}_pct`]) ?? 0
+                            );
+                            return (
+                              <div
+                                key={cat.key}
+                                className="flex items-center justify-between gap-4"
+                              >
+                                <span className="flex items-center gap-2 text-slate-300">
+                                  <span
+                                    className="h-2.5 w-2.5 rounded-xs shrink-0"
+                                    style={{ backgroundColor: cat.color }}
+                                  />
+                                  <span>{cat.label}</span>
+                                </span>
+                                <span className="font-mono text-slate-100">
+                                  {pctVal.toFixed(1)}% · {formatNumber(codeVal, lang)} {t.colCodeLines} · {formatNumber(filesVal, lang)} {t.colFiles}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '6px' }} />
+                {fileTypeSummary.categories.map((cat) => (
+                  <Bar
+                    key={cat.key}
+                    dataKey={cat.key}
+                    name={cat.label}
+                    stackId="fileTypes"
+                    fill={cat.color}
+                    stroke="#111827"
+                    strokeWidth={1}
+                    maxBarSize={42}
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Category Breakdown Summary Table (single-elevation divider layout) */}
+          <div className="mt-4 overflow-x-auto border-t border-slate-800/80 pt-3">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-800/80 text-slate-400">
+                  <th className="py-2 pe-3 text-start font-medium">
+                    {t.fileCategoryCol}
+                  </th>
+                  <th className="py-2 px-3 text-end font-medium">
+                    <span dir="ltr" className="font-mono text-sky-400">
+                      {repoA.repository.name}
+                    </span>
+                  </th>
+                  <th className="py-2 px-3 text-end font-medium">
+                    <span dir="ltr" className="font-mono text-emerald-400">
+                      {repoB.repository.name}
+                    </span>
+                  </th>
+                  <th className="py-2 ps-3 text-end font-medium">
+                    {t.comparisonDiffCol}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {fileTypeSummary.tableRows.map((row) => {
+                  const displayA =
+                    fileTypeMetric === 'files'
+                      ? `${formatNumber(row.aFiles, lang)} (${row.aFilesPct.toFixed(1)}%)`
+                      : `${formatNumber(row.aCodeLines, lang)} (${row.aPct.toFixed(1)}%)`;
+                  const displayB =
+                    fileTypeMetric === 'files'
+                      ? `${formatNumber(row.bFiles, lang)} (${row.bFilesPct.toFixed(1)}%)`
+                      : `${formatNumber(row.bCodeLines, lang)} (${row.bPct.toFixed(1)}%)`;
+                  const diffValue =
+                    fileTypeMetric === 'files'
+                      ? row.aFiles - row.bFiles
+                      : Number((row.aPct - row.bPct).toFixed(1));
+                  const diffLabel =
+                    fileTypeMetric === 'files'
+                      ? formatSignedDiff(diffValue, lang)
+                      : diffValue === 0
+                        ? '0.0%'
+                        : `${diffValue > 0 ? '+' : ''}${diffValue.toFixed(1)}%`;
+
+                  return (
+                    <tr key={row.key} className="hover:bg-slate-800/30">
+                      <td className="h-9 pe-3">
+                        <span className="inline-flex items-center gap-2 font-medium text-slate-200 whitespace-nowrap">
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-xs"
+                            style={{ backgroundColor: row.color }}
+                          />
+                          <span>{row.label}</span>
+                        </span>
+                      </td>
+                      <td className="h-9 px-3 text-end font-mono text-slate-200 tabular-nums whitespace-nowrap">
+                        {displayA}
+                      </td>
+                      <td className="h-9 px-3 text-end font-mono text-slate-200 tabular-nums whitespace-nowrap">
+                        {displayB}
+                      </td>
+                      <td
+                        dir="ltr"
+                        className={`h-9 ps-3 text-end font-mono tabular-nums whitespace-nowrap ${
+                          diffValue > 0
+                            ? 'text-sky-400'
+                            : diffValue < 0
+                              ? 'text-emerald-400'
+                              : 'text-slate-500'
+                        }`}
+                      >
+                        {diffLabel}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Recharts Grouped Comparison Bar Chart */}
       {topChartLanguages.length > 0 && (

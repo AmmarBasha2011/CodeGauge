@@ -199,6 +199,90 @@ export interface Translations {
   heatmapRankCol: string;
   heatmapLargerTag: string;
   heatmapComplexTag: string;
+  navComplexity: string;
+  healthComplexityScoreLabel: string;
+  healthComplexityAvgSub: string;
+  complexitySectionTitle: string;
+  complexitySectionSubtitle: string;
+  complexityScoreLabel: string;
+  complexityAvgLabel: string;
+  complexityAvgSub: string;
+  complexityPeakLabel: string;
+  complexityPeakSub: string;
+  complexityFlaggedLabel: string;
+  complexityFlaggedSub: string;
+  complexityTierLow: string;
+  complexityTierModerate: string;
+  complexityTierHigh: string;
+  complexityFilterAll: string;
+  complexityFilterCriticalHigh: string;
+  complexityFilterNesting: string;
+  complexityFilterLarge: string;
+  complexityMetricValue: string;
+  complexityDepthLabel: string;
+  complexityFunctionsLabel: string;
+  complexitySeverityCritical: string;
+  complexitySeverityHigh: string;
+  complexitySeverityModerate: string;
+  recTitleExtractFunctions: string;
+  recDescExtractFunctions: string;
+  recTitleFlattenNesting: string;
+  recDescFlattenNesting: string;
+  recTitleSimplifyConditionals: string;
+  recDescSimplifyConditionals: string;
+  recTitleSplitModule: string;
+  recDescSplitModule: string;
+  recTitleAddDocumentation: string;
+  recDescAddDocumentation: string;
+  complexityCleanTitle: string;
+  complexityCleanDesc: string;
+  complexityNoMatchFilter: string;
+  kpiTooltipTotalLines: string;
+  kpiTooltipLanguages: string;
+  kpiTooltipAnalyzedFiles: string;
+  kpiTooltipTotalSize: string;
+  kpiTooltipComplexityScore: string;
+  kpiTooltipComplexityAvg: string;
+  kpiTooltipComplexityPeak: string;
+  kpiTooltipComplexityFlagged: string;
+  kpiTooltipLastUpdated: string;
+  kpiTooltipOpenPrs: string;
+  kpiTooltipCommitFrequency: string;
+  hotspotTreemapTitle: string;
+  hotspotTreemapSubtitle: string;
+  hotspotRootLabel: string;
+  hotspotZoomOutButton: string;
+  hotspotLegendLow: string;
+  hotspotLegendModerate: string;
+  hotspotLegendElevated: string;
+  hotspotLegendCritical: string;
+  hotspotLegendData: string;
+  hotspotClickFolderHint: string;
+  hotspotClickFileHint: string;
+  hotspotOtherSmallItems: string;
+  hotspotFolderSummary: string;
+  hotspotSelectedFileTitle: string;
+  hotspotOpenInExplorer: string;
+  hotspotEmptyDir: string;
+  adoptionTrendTitle: string;
+  adoptionTrendSubtitle: string;
+  adoptionIncreasingLabel: string;
+  adoptionDecreasingLabel: string;
+  adoptionStableLabel: string;
+  adoptionNewFilesMonth: string;
+  adoptionCreated12m: string;
+  adoptionNoChangeLabel: string;
+  fileTypeSummaryTitle: string;
+  fileTypeSummarySubtitle: string;
+  fileTypeMetricShare: string;
+  fileTypeMetricLines: string;
+  fileTypeMetricFiles: string;
+  fileCategorySource: string;
+  fileCategoryTests: string;
+  fileCategoryDocs: string;
+  fileCategoryConfig: string;
+  fileCategoryOther: string;
+  fileCategoryCol: string;
 }
 
 const EN: Translations = {
@@ -419,6 +503,111 @@ const EN: Translations = {
   heatmapRankCol: '#',
   heatmapLargerTag: '{ratio}× bytes',
   heatmapComplexTag: '{ratio}× lines',
+  navComplexity: 'Complexity',
+  healthComplexityScoreLabel: 'Cyclomatic Complexity',
+  healthComplexityAvgSub: 'Avg M = {avg} across {files} code files',
+  complexitySectionTitle: 'Cyclomatic Complexity & Refactoring Recommendations',
+  complexitySectionSubtitle:
+    'Structural complexity analysis across source files, highlighting control-flow hotspots and targeted refactoring actions.',
+  complexityScoreLabel: 'Complexity Health Score',
+  complexityAvgLabel: 'Average File Complexity',
+  complexityAvgSub: 'Across {files} logic files · avg depth {depth}',
+  complexityPeakLabel: 'Peak File Complexity',
+  complexityPeakSub: 'Highest branch complexity in a single file',
+  complexityFlaggedLabel: 'Refactoring Targets',
+  complexityFlaggedSub: 'Files with complexity ≥ 15 or deep nesting',
+  complexityTierLow: 'Low Complexity',
+  complexityTierModerate: 'Moderate Complexity',
+  complexityTierHigh: 'High Complexity',
+  complexityFilterAll: 'All Flagged',
+  complexityFilterCriticalHigh: 'Critical & High',
+  complexityFilterNesting: 'Deep Nesting',
+  complexityFilterLarge: 'Large Modules',
+  complexityMetricValue: 'M = {value}',
+  complexityDepthLabel: 'Depth {depth}',
+  complexityFunctionsLabel: '{count} functions',
+  complexitySeverityCritical: 'Critical',
+  complexitySeverityHigh: 'High',
+  complexitySeverityModerate: 'Moderate',
+  recTitleExtractFunctions: 'Extract Helper Functions',
+  recDescExtractFunctions:
+    'High branch density relative to function count indicates monolithic routines; extract cohesive blocks into pure single-purpose helpers.',
+  recTitleFlattenNesting: 'Flatten Deep Nesting',
+  recDescFlattenNesting:
+    'Control blocks reach {depth} levels of nesting; introduce early returns, guard clauses, and inverted conditionals.',
+  recTitleSimplifyConditionals: 'Simplify Branching Logic',
+  recDescSimplifyConditionals:
+    'Dense decision trees (M = {complexity}) increase test surface; replace chained conditionals or switches with lookup maps or strategy dispatch.',
+  recTitleSplitModule: 'Split Monolithic Module',
+  recDescSplitModule:
+    'Large file footprint ({lines} code lines) mixes multiple responsibilities; decompose into smaller feature-scoped modules.',
+  recTitleAddDocumentation: 'Document Complex Branches',
+  recDescAddDocumentation:
+    'Minimal inline documentation for high control-flow complexity; document key invariants and edge-case branches before refactoring.',
+  complexityCleanTitle: 'Clean Structural Complexity',
+  complexityCleanDesc:
+    'All analyzed source files stay below the high-complexity threshold (M < 15) with balanced nesting depth.',
+  complexityNoMatchFilter: 'No flagged files match the selected complexity filter.',
+  kpiTooltipTotalLines:
+    'Sum of all lines (non-blank code lines + blank lines) across every parsed text/source file, excluding binaries and files over 5 MB.',
+  kpiTooltipLanguages:
+    'Count of distinct programming, markup, and configuration languages detected from file extensions and special filenames (including APL via .apl).',
+  kpiTooltipAnalyzedFiles:
+    'Number of text and source files successfully scanned from the repository archive; binary assets and files exceeding 5 MB are skipped.',
+  kpiTooltipTotalSize:
+    'Total uncompressed byte size of all analyzed source files, paired with the server archive download and parsing time.',
+  kpiTooltipComplexityScore:
+    'Weighted 0–100 health index (100 = cleanest) penalized by average McCabe complexity, share of flagged files, nesting depth, and peak complexity.',
+  kpiTooltipComplexityAvg:
+    'Mean McCabe cyclomatic complexity (M) per logic file, starting at 1 and adding control-flow branches (if, loops, switch/case, &&, ||, ?:, APL guards).',
+  kpiTooltipComplexityPeak:
+    'Highest McCabe cyclomatic complexity (M) measured in any single programming/scripting file across the repository.',
+  kpiTooltipComplexityFlagged:
+    'Source files flagged for refactoring due to M ≥ 15, deep block nesting (≥ 5 with 100+ code lines), or monolithic size (≥ 450 lines with M ≥ 10).',
+  kpiTooltipLastUpdated:
+    'Most recent push or repository metadata update timestamp reported by GitHub for this repository.',
+  kpiTooltipOpenPrs:
+    'Live count of currently open pull requests retrieved from the GitHub REST API.',
+  kpiTooltipCommitFrequency:
+    'Estimated commits per week and trailing 30-day commit volume sampled from up to 100 recent commits on the default branch.',
+  hotspotTreemapTitle: 'Code Hotspot Directory Treemap',
+  hotspotTreemapSubtitle:
+    'Rectangle area reflects lines of code density; color indicates cyclomatic complexity. Click any folder to zoom in or click a file to inspect.',
+  hotspotRootLabel: 'Root',
+  hotspotZoomOutButton: 'Up One Level',
+  hotspotLegendLow: 'Low (M < 10)',
+  hotspotLegendModerate: 'Moderate (10–19)',
+  hotspotLegendElevated: 'Elevated (20–34)',
+  hotspotLegendCritical: 'Hotspot (M ≥ 35)',
+  hotspotLegendData: 'Config / Docs',
+  hotspotClickFolderHint: 'Click folder to zoom into contents',
+  hotspotClickFileHint: 'Click file to inspect complexity details',
+  hotspotOtherSmallItems: '{count} smaller items',
+  hotspotFolderSummary: '{files} files · Avg M = {avg} · Peak M = {peak}',
+  hotspotSelectedFileTitle: 'Selected File Hotspot',
+  hotspotOpenInExplorer: 'Filter in File Explorer',
+  hotspotEmptyDir: 'No non-empty source files found inside this folder.',
+  adoptionTrendTitle: 'Language Adoption Trend (12 Months)',
+  adoptionTrendSubtitle:
+    'Tracks monthly file creations and codebase usage across the top 5 languages over the past 12 months.',
+  adoptionIncreasingLabel: 'Increasing',
+  adoptionDecreasingLabel: 'Decreasing',
+  adoptionStableLabel: 'Stable',
+  adoptionNewFilesMonth: '+{count} created',
+  adoptionCreated12m: '{count} files created in 12m',
+  adoptionNoChangeLabel: 'No net change',
+  fileTypeSummaryTitle: 'File Type Distribution Comparison',
+  fileTypeSummarySubtitle:
+    'Compares how each repository allocates source code, tests, documentation, configuration, and markup across analyzed files.',
+  fileTypeMetricShare: 'Share (%)',
+  fileTypeMetricLines: 'Code Lines',
+  fileTypeMetricFiles: 'File Count',
+  fileCategorySource: 'Source Code',
+  fileCategoryTests: 'Tests & Specs',
+  fileCategoryDocs: 'Documentation',
+  fileCategoryConfig: 'Config & Build',
+  fileCategoryOther: 'Markup & Other',
+  fileCategoryCol: 'File Category',
 };
 
 const AR: Translations = {
@@ -639,6 +828,111 @@ const AR: Translations = {
   heatmapRankCol: '#',
   heatmapLargerTag: '{ratio}× حجم',
   heatmapComplexTag: '{ratio}× أسطر',
+  navComplexity: 'التعقيد',
+  healthComplexityScoreLabel: 'التعقيد السيكلوماتي',
+  healthComplexityAvgSub: 'المتوسط M = {avg} عبر {files} ملفاً برمجياً',
+  complexitySectionTitle: 'التعقيد السيكلوماتي وتوصيات إعادة الهيكلة',
+  complexitySectionSubtitle:
+    'تحليل البنية البرمجية وتفرعات التدفق لتحديد الملفات الأعلى تعقيداً واقتراح خطوات عملية لإعادة الهيكلة.',
+  complexityScoreLabel: 'مؤشر صحة التعقيد',
+  complexityAvgLabel: 'متوسط تعقيد الملف',
+  complexityAvgSub: 'عبر {files} ملفاً برمجياً · متوسط العمق {depth}',
+  complexityPeakLabel: 'أعلى تعقيد لملف',
+  complexityPeakSub: 'أعلى عدد مسارات تفرع في ملف واحد',
+  complexityFlaggedLabel: 'ملفات مرشحة للتحسين',
+  complexityFlaggedSub: 'ملفات ذات تعقيد ≥ 15 أو تداخل عميق',
+  complexityTierLow: 'تعقيد منخفض',
+  complexityTierModerate: 'تعقيد متوسط',
+  complexityTierHigh: 'تعقيد مرتفع',
+  complexityFilterAll: 'جميع الملفات المرصودة',
+  complexityFilterCriticalHigh: 'حرج ومرتفع',
+  complexityFilterNesting: 'تداخل عميق',
+  complexityFilterLarge: 'ملفات ضخمة',
+  complexityMetricValue: 'M = {value}',
+  complexityDepthLabel: 'عمق {depth}',
+  complexityFunctionsLabel: '{count} دوال',
+  complexitySeverityCritical: 'حرج',
+  complexitySeverityHigh: 'مرتفع',
+  complexitySeverityModerate: 'متوسط',
+  recTitleExtractFunctions: 'استخلاص دوال مساعدة',
+  recDescExtractFunctions:
+    'ارتفاع كثافة التفرعات مقارنة بعدد الدوال يشير إلى دوال متضخمة؛ افصل الأجزاء المترابطة إلى دوال صغيرة محددة المسؤولية.',
+  recTitleFlattenNesting: 'تقليل التداخل الشرطي',
+  recDescFlattenNesting:
+    'تصل الكتل البرمجية إلى {depth} مستويات من التداخل؛ استخدم الإرجاع المبكر وشروط الحماية لتسطيح المسار.',
+  recTitleSimplifyConditionals: 'تبسيط منطق التفرعات',
+  recDescSimplifyConditionals:
+    'شجرة القرارات الكثيفة (M = {complexity}) تزيد احتمالية الأخطاء؛ استبدل سلاسل الشروط الطويلة بجداول بحث أو نمط الاستراتيجية.',
+  recTitleSplitModule: 'تقسيم الوحدة البرمجية',
+  recDescSplitModule:
+    'حجم الملف الكبير ({lines} سطر كود) يجمع عدة مسؤوليات؛ قسّمه إلى وحدات أصغر متخصصة.',
+  recTitleAddDocumentation: 'توثيق المسارات المعقدة',
+  recDescAddDocumentation:
+    'نسبة التعليقات منخفضة مقارنة بتعقيد التدفق؛ أضف توضيحاً للشروط الحدية والقواعد قبل إعادة الهيكلة.',
+  complexityCleanTitle: 'بنية برمجية متوازنة',
+  complexityCleanDesc:
+    'جميع الملفات البرمجية المحللة تقع ضمن حدود التعقيد الآمنة (M < 15) وبمستوى تداخل متوازن.',
+  complexityNoMatchFilter: 'لا توجد ملفات مطابقة لتصفية التعقيد المحددة.',
+  kpiTooltipTotalLines:
+    'إجمالي عدد الأسطر (أسطر الكود غير الفارغة + الأسطر الفارغة) عبر جميع الملفات النصية والبرمجية المحللة، باستثناء الملفات الثنائية وما يتجاوز 5 ميجابايت.',
+  kpiTooltipLanguages:
+    'عدد لغات البرمجة والتنسيق والتكوين المميزة المكتشفة عبر امتدادات الملفات وأسمائها الخاصة (بما فيها APL عبر .apl).',
+  kpiTooltipAnalyzedFiles:
+    'إجمالي الملفات النصية والبرمجية التي تم فحصها وعدّ أسطرها من أرشيف المستودع؛ يتم تخطي الملفات الثنائية وما يتجاوز 5 ميجابايت تلقائياً.',
+  kpiTooltipTotalSize:
+    'مجموع الأحجام غير المضغوطة بالبايت لجميع الملفات البرمجية المحللة مع مدة التحميل والتحليل على الخادم.',
+  kpiTooltipComplexityScore:
+    'مؤشر صحة من 0 إلى 100 (100 = الأبسط) يتأثر بمتوسط التعقيد السيكلوماتي، نسبة الملفات المعقدة، عمق التداخل، وأعلى تعقيد لملف.',
+  kpiTooltipComplexityAvg:
+    'متوسط التعقيد السيكلوماتي (M) لكل ملف برمجي؛ يبدأ من 1 ويزداد مع كل تفرع تدفق (الشروط، الحلقات، switch/case، &&، ||، وحراس APL).',
+  kpiTooltipComplexityPeak:
+    'أعلى قيمة تعقيد سيكلوماتي (M) تم رصدها في ملف برمجي واحد داخل المستودع.',
+  kpiTooltipComplexityFlagged:
+    'عدد الملفات المرشحة لإعادة الهيكلة بسبب M ≥ 15، أو تداخل عميق (≥ 5 مع أكثر من 100 سطر)، أو حجم متضخم (≥ 450 سطراً مع M ≥ 10).',
+  kpiTooltipLastUpdated:
+    'أحدث طابع زمني للدفع البرمجي أو التحديث مسجل للمستودع عبر واجهة GitHub.',
+  kpiTooltipOpenPrs:
+    'العدد الفعلي لطلبات الدمج المفتوحة حالياً والمجلب من واجهة برمجة تطبيقات GitHub.',
+  kpiTooltipCommitFrequency:
+    'متوسط الإيداعات الأسبوعي وإجمالي الإيداعات خلال آخر 30 يوماً استناداً إلى عينة تصل إلى أحدث 100 إيداع على الفرع المحلل.',
+  hotspotTreemapTitle: 'خريطة الكثافة والبؤر الساخنة للمجلدات (Treemap)',
+  hotspotTreemapSubtitle:
+    'تمثل مساحة المستطيل كثافة أسطر الكود ويمثل اللون درجة التعقيد السيكلوماتي. اضغط على أي مجلد للتكبير أو على ملف لمعاينته.',
+  hotspotRootLabel: 'الجذر',
+  hotspotZoomOutButton: 'مستوى للأعلى',
+  hotspotLegendLow: 'منخفض (M < 10)',
+  hotspotLegendModerate: 'متوسط (10–19)',
+  hotspotLegendElevated: 'مرتفع (20–34)',
+  hotspotLegendCritical: 'بؤرة ساخنة (M ≥ 35)',
+  hotspotLegendData: 'إعدادات / توثيق',
+  hotspotClickFolderHint: 'اضغط على المجلد للتعمق في ملفاته',
+  hotspotClickFileHint: 'اضغط على الملف لعرض تفاصيل التعقيد',
+  hotspotOtherSmallItems: '{count} عناصر أصغر',
+  hotspotFolderSummary: '{files} ملفاً · متوسط M = {avg} · أعلى M = {peak}',
+  hotspotSelectedFileTitle: 'تفاصيل الملف المحدد',
+  hotspotOpenInExplorer: 'تصفية في مستكشف الملفات',
+  hotspotEmptyDir: 'لا توجد ملفات برمجية غير فارغة داخل هذا المجلد.',
+  adoptionTrendTitle: 'اتجاه تبنّي اللغات البرمجية (آخر 12 شهراً)',
+  adoptionTrendSubtitle:
+    'يتتبع تواريخ إنشاء الملفات وحجم الاستخدام الشهري لأبرز 5 لغات برمجية على مدار العام الماضي.',
+  adoptionIncreasingLabel: 'في ازدياد',
+  adoptionDecreasingLabel: 'في تراجع',
+  adoptionStableLabel: 'مستقر',
+  adoptionNewFilesMonth: '+{count} ملف جديد',
+  adoptionCreated12m: '{count} ملفات أُنشئت خلال 12 شهراً',
+  adoptionNoChangeLabel: 'دون تغيير',
+  fileTypeSummaryTitle: 'مقارنة توزيع أنواع الملفات',
+  fileTypeSummarySubtitle:
+    'تقارن نسبة الشيفرة المصدرية والاختبارات والتوثيق وملفات التكوين والتنسيق بين المستودعين.',
+  fileTypeMetricShare: 'النسبة (%)',
+  fileTypeMetricLines: 'أسطر الكود',
+  fileTypeMetricFiles: 'عدد الملفات',
+  fileCategorySource: 'الشيفرة المصدرية',
+  fileCategoryTests: 'الاختبارات',
+  fileCategoryDocs: 'التوثيق',
+  fileCategoryConfig: 'التكوين والبناء',
+  fileCategoryOther: 'التنسيق وأخرى',
+  fileCategoryCol: 'فئة الملف',
 };
 
 export const DICTIONARY: Record<AppLanguage, Translations> = {

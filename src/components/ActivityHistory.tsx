@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import { formatMessage, formatNumber, type Translations } from '../lib/i18n.ts';
 import type { AppLanguage, RepoMetadata } from '../lib/types.ts';
+import { KpiCardHeader } from './KpiCardHeader.tsx';
 
 interface ActivityHistoryProps {
   t: Translations;
@@ -101,10 +102,11 @@ export function ActivityHistory({ t, lang, repository }: ActivityHistoryProps) {
       {/* 3 Activity Metric Columns */}
       <div className="mt-5 grid grid-cols-1 gap-4 border-t border-slate-800/80 pt-4 sm:grid-cols-3">
         <div>
-          <div className="flex items-center gap-1.5 text-xs font-medium text-slate-400">
-            <Clock className="h-3.5 w-3.5 text-sky-400 shrink-0" aria-hidden="true" />
-            <span>{t.lastUpdatedLabel}</span>
-          </div>
+          <KpiCardHeader
+            label={t.lastUpdatedLabel}
+            tooltip={t.kpiTooltipLastUpdated}
+            icon={<Clock className="h-3.5 w-3.5 text-sky-400 shrink-0" aria-hidden="true" />}
+          />
           <div className="mt-1.5 text-base font-semibold text-slate-100">
             {updatedInfo ? updatedInfo.relative : t.unavailableLabel}
           </div>
@@ -116,10 +118,11 @@ export function ActivityHistory({ t, lang, repository }: ActivityHistoryProps) {
         </div>
 
         <div className="border-t border-slate-800/80 pt-3 sm:border-t-0 sm:pt-0 sm:border-s sm:ps-4">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-slate-400">
-            <GitPullRequest className="h-3.5 w-3.5 text-emerald-400 shrink-0" aria-hidden="true" />
-            <span>{t.openPrsLabel}</span>
-          </div>
+          <KpiCardHeader
+            label={t.openPrsLabel}
+            tooltip={t.kpiTooltipOpenPrs}
+            icon={<GitPullRequest className="h-3.5 w-3.5 text-emerald-400 shrink-0" aria-hidden="true" />}
+          />
           <div className="mt-1.5 font-mono text-xl font-bold text-slate-100 tabular-nums">
             {typeof repository.openPullRequests === 'number'
               ? formatNumber(repository.openPullRequests, lang)
@@ -131,10 +134,12 @@ export function ActivityHistory({ t, lang, repository }: ActivityHistoryProps) {
         </div>
 
         <div className="border-t border-slate-800/80 pt-3 sm:border-t-0 sm:pt-0 sm:border-s sm:ps-4">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-slate-400">
-            <Activity className="h-3.5 w-3.5 text-sky-400 shrink-0" aria-hidden="true" />
-            <span>{t.commitFrequencyLabel}</span>
-          </div>
+          <KpiCardHeader
+            label={t.commitFrequencyLabel}
+            tooltip={t.kpiTooltipCommitFrequency}
+            align="end"
+            icon={<Activity className="h-3.5 w-3.5 text-sky-400 shrink-0" aria-hidden="true" />}
+          />
           <div className="mt-1.5 font-mono text-xl font-bold text-slate-100 tabular-nums">
             {repository.activity
               ? formatMessage(t.commitsPerWeekUnit, {

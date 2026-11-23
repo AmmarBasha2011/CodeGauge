@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react';
+import { Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
   Legend,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,6 +18,8 @@ import { formatBytes } from '../lib/languageMap.ts';
 import type {
   AppLanguage,
   HistoricalLanguageSnapshot,
+  LanguageAdoptionMonth,
+  LanguageAdoptionTrend,
   LanguageStat,
 } from '../lib/types.ts';
 
@@ -26,6 +31,7 @@ interface LanguageBreakdownProps {
   selectedLanguage: string;
   onSelectLanguage: (languageName: string) => void;
   languageHistory?: HistoricalLanguageSnapshot | null;
+  languageAdoption?: LanguageAdoptionTrend | null;
 }
 
 interface BarTooltipPayloadItem {
@@ -61,6 +67,16 @@ function formatSnapshotDate(iso: string, lang: AppLanguage): string {
   }).format(date);
 }
 
+function formatMonthLabel(timestamp: string, monthKey: string, lang: AppLanguage): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return monthKey;
+  return new Intl.DateTimeFormat(lang === 'ar' ? 'ar-EG' : 'en-US', {
+    month: 'short',
+    year: '2-digit',
+    timeZone: 'UTC',
+  }).format(date);
+}
+
 export function LanguageBreakdown({
   t,
   lang,
@@ -69,12 +85,16 @@ export function LanguageBreakdown({
   selectedLanguage,
   onSelectLanguage,
   languageHistory,
+  languageAdoption,
 }: LanguageBreakdownProps) {
   const [hoveredLang, setHoveredLang] = useState<string | null>(null);
   const [barMetric, setBarMetric] = useState<'codeLines' | 'lines'>('codeLines');
   const [growthMetric, setGrowthMetric] = useState<'codeLines' | 'percentage'>(
     'codeLines'
   );
+  const [adoptionMetric, setAdoptionMetric] = useState<
+    'codeLines' | 'percentage' | 'files'
+  >('codeLines');
 
   const chartSegments = useMemo(() => {
     const top = languages.slice(0, 8);
@@ -140,6 +160,28 @@ export function LanguageBreakdown({
       };
     });
   }, [languages, languageHistory]);
+
+  const adoptionChartData = useMemo(() => {
+    if (!languageAdoption || languageAdoption.months.length === 0) return [];
+    return languageAdoption.months.map((month) => {
+      const row: Record<string, string | number | LanguageAdoptionMonth> = {
+        monthKey: month.monthKey,
+        label: formatMonthLabel(month.timestamp, month.monthKey, lang),
+        __rawMonth: month,
+      };
+      for (const topLang of languageAdoption.topLanguages) {
+        const pt = month.languages[topLang.name];
+        if (adoptionMetric === 'percentage') {
+          row[topLang.name] = Number((pt?.percentage ?? 0).toFixed(2));
+        } else if (adoptionMetric === 'files') {
+          row[topLang.name] = pt?.files ?? 0;
+        } else {
+          row[topLang.name] = pt?.codeLines ?? 0;
+        }
+      }
+      return row;
+    });
+  }, [languageAdoption, adoptionMetric, lang]);
 
   const activeHoverStat = useMemo(() => {
     const targetName =
@@ -591,6 +633,252 @@ export function LanguageBreakdown({
           </div>
         </div>
       )}
+
+      {/* Recharts 12-Month Language Adoption Trend Line Chart */}
+      {languageAdoption &&
+        languageAdoption.topLanguages.length > 0 &&
+        adoptionChartData.length > 0 && (
+          <div className="mt-6 rounded-xl border border-slate-800/80 bg-[#111827] p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-100">
+                  {t.adoptionTrendTitle}
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {t.adoptionTrendSubtitle}
+                </p>
+              </div>
+
+              <div
+                role="group"
+                aria-label={t.adoptionTrendTitle}
+                className="inline-flex items-center self-start sm:self-auto rounded-lg border border-slate-800 bg-[#0B0F17] p-1 shrink-0"
+              >
+                <button
+                  type="button"
+                  onClick={() => setAdoptionMetric('codeLines')}
+                  aria-pressed={adoptionMetric === 'codeLines'}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    adoptionMetric === 'codeLines'
+                      ? 'bg-sky-500/20 text-sky-300'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {t.langGrowthMetricLines}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdoptionMetric('percentage')}
+                  aria-pressed={adoptionMetric === 'percentage'}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    adoptionMetric === 'percentage'
+                      ? 'bg-sky-500/20 text-sky-300'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {t.langGrowthMetricShare}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdoptionMetric('files')}
+                  aria-pressed={adoptionMetric === 'files'}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    adoptionMetric === 'files'
+                      ? 'bg-sky-500/20 text-sky-300'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {t.colFiles}
+                </button>
+              </div>
+            </div>
+
+            <div dir="ltr" className="mt-4 h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={adoptionChartData}
+                  margin={{ top: 12, right: 16, left: 4, bottom: 8 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#1E293B"
+                    vertical={false}
+                  />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fill: '#94A3B8', fontSize: 11 }}
+                    axisLine={{ stroke: '#334155' }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fill: '#94A3B8', fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={48}
+                    domain={[0, 'auto']}
+                    tickFormatter={(val: number) =>
+                      adoptionMetric === 'percentage'
+                        ? `${val}%`
+                        : formatCompactAxis(val)
+                    }
+                  />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload || payload.length === 0) return null;
+                      const firstRow = payload[0].payload as {
+                        label: string;
+                        __rawMonth: LanguageAdoptionMonth;
+                      };
+                      const rawMonth = firstRow.__rawMonth;
+                      return (
+                        <div
+                          dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                          className="rounded-lg border border-slate-700 bg-[#0B0F17] px-3.5 py-2.5 text-xs shadow-lg"
+                        >
+                          <div className="mb-2 font-semibold text-slate-100">
+                            {firstRow.label}
+                          </div>
+                          <div className="space-y-1.5 tabular-nums">
+                            {languageAdoption.topLanguages.map((topLang) => {
+                              const pt = rawMonth.languages[topLang.name];
+                              const displayVal =
+                                adoptionMetric === 'percentage'
+                                  ? `${(pt?.percentage ?? 0).toFixed(1)}%`
+                                  : adoptionMetric === 'files'
+                                    ? formatNumber(pt?.files ?? 0, lang)
+                                    : formatNumber(pt?.codeLines ?? 0, lang);
+                              const newFiles = pt?.newFiles ?? 0;
+
+                              return (
+                                <div
+                                  key={topLang.name}
+                                  className="flex items-center justify-between gap-4"
+                                >
+                                  <span className="flex items-center gap-1.5 text-slate-300">
+                                    <span
+                                      className="h-2 w-2 rounded-xs shrink-0"
+                                      style={{ backgroundColor: topLang.color }}
+                                    />
+                                    <span>{topLang.name}</span>
+                                  </span>
+                                  <span className="flex items-center gap-2 font-mono">
+                                    <span className="font-semibold text-slate-100">
+                                      {displayVal}
+                                    </span>
+                                    {newFiles > 0 && (
+                                      <span className="text-[11px] text-emerald-400">
+                                        {formatMessage(t.adoptionNewFilesMonth, {
+                                          count: formatNumber(newFiles, lang),
+                                        })}
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '6px' }} />
+                  {languageAdoption.topLanguages.map((topLang) => (
+                    <Line
+                      key={topLang.name}
+                      type="monotone"
+                      dataKey={topLang.name}
+                      name={topLang.name}
+                      stroke={topLang.color}
+                      strokeWidth={2.25}
+                      dot={{ r: 3, strokeWidth: 1.5, fill: '#111827' }}
+                      activeDot={{ r: 5 }}
+                      connectNulls
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* 12-Month Per-Language Trend Summary Strip */}
+            <div className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-800/80 pt-4 sm:grid-cols-2 lg:grid-cols-5">
+              {languageAdoption.summary.map((item) => {
+                const TrendIcon =
+                  item.trend === 'increasing'
+                    ? TrendingUp
+                    : item.trend === 'decreasing'
+                      ? TrendingDown
+                      : Minus;
+                const trendLabel =
+                  item.trend === 'increasing'
+                    ? t.adoptionIncreasingLabel
+                    : item.trend === 'decreasing'
+                      ? t.adoptionDecreasingLabel
+                      : t.adoptionStableLabel;
+                const trendTone =
+                  item.trend === 'increasing'
+                    ? 'text-emerald-400'
+                    : item.trend === 'decreasing'
+                      ? 'text-rose-400'
+                      : 'text-slate-400';
+
+                const deltaVal =
+                  adoptionMetric === 'percentage'
+                    ? item.deltaPercentage
+                    : adoptionMetric === 'files'
+                      ? item.endFiles - item.startFiles
+                      : item.deltaCodeLines;
+                const deltaDisplay =
+                  deltaVal === 0
+                    ? t.adoptionNoChangeLabel
+                    : adoptionMetric === 'percentage'
+                      ? `${deltaVal > 0 ? '+' : ''}${deltaVal.toFixed(1)}%`
+                      : `${deltaVal > 0 ? '+' : '-'}${formatNumber(
+                          Math.abs(deltaVal),
+                          lang
+                        )}`;
+
+                return (
+                  <div
+                    key={item.name}
+                    className="flex flex-col gap-1.5 border-b border-slate-800/60 pb-2.5 last:border-b-0 lg:border-b-0 lg:border-e lg:pb-0 lg:pe-3 lg:last:border-e-0 lg:last:pe-0"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-xs"
+                          style={{ backgroundColor: item.color }}
+                        />
+                        <span className="truncate text-xs font-medium text-slate-200">
+                          {item.name}
+                        </span>
+                      </span>
+                      <span
+                        className={`inline-flex items-center gap-1 text-[11px] font-medium shrink-0 ${trendTone}`}
+                      >
+                        <TrendIcon className="h-3.5 w-3.5 shrink-0" />
+                        <span>{trendLabel}</span>
+                      </span>
+                    </div>
+
+                    <div className="flex items-baseline justify-between gap-2 tabular-nums">
+                      <span
+                        dir="ltr"
+                        className={`font-mono text-xs font-semibold ${trendTone}`}
+                      >
+                        {deltaDisplay}
+                      </span>
+                      <span className="font-mono text-[11px] text-slate-400">
+                        {formatMessage(t.adoptionCreated12m, {
+                          count: formatNumber(item.createdFiles12m, lang),
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
       {/* Donut chart + High-density language breakdown table */}
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">

@@ -13,8 +13,15 @@ import type {
   AnalysisResult,
   CodeHealthMetrics,
   CommitActivitySummary,
+  ComplexityMetrics,
   HistoricalLanguageSnapshot,
+  LanguageAdoptionMonth,
+  LanguageAdoptionSummaryItem,
+  LanguageAdoptionTrend,
   LanguageStat,
+  MonthlyLanguagePoint,
+  RefactoringCategory,
+  RefactoringRecommendation,
   RepoMetadata,
   StreamEvent,
   WeeklyCommitBucket,
@@ -170,15 +177,26 @@ async function fetchOpenPullRequestCount(
 interface CommitRef {
   sha: string;
   date: string;
+  ms: number;
 }
 
 interface CommitActivityFetchResult {
   activity: CommitActivitySummary | null;
   latestSha: string | null;
   oneMonthAgoRef: CommitRef | null;
+  commitRefs: CommitRef[];
+  commitsSampledCount: number;
+  rateLimitRemaining: number | null;
 }
 
 const VALID_SHA_RE = /^[a-f0-9]{7,40}$/i;
+
+function parseRateLimitRemaining(headers: Headers): number | null {
+  const raw = headers.get('x-ratelimit-remaining');
+  if (raw === null) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
 
 async function fetchCommitActivity(
   safeOwner: string,
@@ -193,8 +211,16 @@ async function fetchCommitActivity(
       signal,
       headers: buildGitHubHeaders(),
     });
+    const rateLimitRemaining = parseRateLimitRemaining(resp.headers);
     if (!resp.ok) {
-      return { activity: null, latestSha: null, oneMonthAgoRef: null };
+      return {
+        activity: null,
+        latestSha: null,
+        oneMonthAgoRef: null,
+        commitRefs: [],
+        commitsSampledCount: 0,
+        rateLimitRemaining,
+      };
     }
 
     const commits = (await resp.json()) as Array<{
@@ -217,10 +243,14 @@ async function fetchCommitActivity(
         },
         latestSha: null,
         oneMonthAgoRef: null,
+        commitRefs: [],
+        commitsSampledCount: 0,
+        rateLimitRemaining,
       };
     }
 
     const timestamps: number[] = [];
+    const commitRefs: CommitRef[] = [];
     let lastCommitAt: string | null = null;
     const latestSha =
       commits[0]?.sha && VALID_SHA_RE.test(commits[0].sha)
@@ -240,16 +270,17 @@ async function fetchCommitActivity(
       const ms = Date.parse(dateStr);
       if (Number.isFinite(ms)) {
         timestamps.push(ms);
-        if (
-          !oneMonthAgoRef &&
-          ms <= thirtyDaysAgo &&
-          entry.sha &&
-          VALID_SHA_RE.test(entry.sha)
-        ) {
-          oneMonthAgoRef = { sha: entry.sha, date: dateStr };
+        if (entry.sha && VALID_SHA_RE.test(entry.sha)) {
+          const ref: CommitRef = { sha: entry.sha, date: dateStr, ms };
+          commitRefs.push(ref);
+          if (!oneMonthAgoRef && ms <= thirtyDaysAgo) {
+            oneMonthAgoRef = ref;
+          }
         }
       }
     }
+
+    let latestRateLimit = rateLimitRemaining;
 
     // If all 100 sampled commits were within the last 30 days, query 1 commit <= 30d ago
     if (!oneMonthAgoRef && commits.length >= 100) {
@@ -262,6 +293,8 @@ async function fetchCommitActivity(
           signal,
           headers: buildGitHubHeaders(),
         });
+        const nextLimit = parseRateLimitRemaining(histResp.headers);
+        if (nextLimit !== null) latestRateLimit = nextLimit;
         if (histResp.ok) {
           const histCommits = (await histResp.json()) as Array<{
             sha?: string;
@@ -273,8 +306,14 @@ async function fetchCommitActivity(
           const first = histCommits[0];
           const histDate =
             first?.commit?.author?.date ?? first?.commit?.committer?.date;
-          if (first?.sha && VALID_SHA_RE.test(first.sha) && histDate) {
-            oneMonthAgoRef = { sha: first.sha, date: histDate };
+          const histMs = histDate ? Date.parse(histDate) : NaN;
+          if (
+            first?.sha &&
+            VALID_SHA_RE.test(first.sha) &&
+            histDate &&
+            Number.isFinite(histMs)
+          ) {
+            oneMonthAgoRef = { sha: first.sha, date: histDate, ms: histMs };
           }
         }
       } catch {
@@ -283,7 +322,14 @@ async function fetchCommitActivity(
     }
 
     if (timestamps.length === 0) {
-      return { activity: null, latestSha, oneMonthAgoRef };
+      return {
+        activity: null,
+        latestSha,
+        oneMonthAgoRef,
+        commitRefs,
+        commitsSampledCount: commits.length,
+        rateLimitRemaining: latestRateLimit,
+      };
     }
 
     const commitsLast30Days = timestamps.filter((t) => t >= thirtyDaysAgo).length;
@@ -320,53 +366,95 @@ async function fetchCommitActivity(
       },
       latestSha,
       oneMonthAgoRef,
+      commitRefs,
+      commitsSampledCount: commits.length,
+      rateLimitRemaining: latestRateLimit,
     };
   } catch {
-    return { activity: null, latestSha: null, oneMonthAgoRef: null };
+    return {
+      activity: null,
+      latestSha: null,
+      oneMonthAgoRef: null,
+      commitRefs: [],
+      commitsSampledCount: 0,
+      rateLimitRemaining: null,
+    };
   }
 }
 
 const MAX_HISTORICAL_ARCHIVE_BYTES = 50 * 1024 * 1024; // 50 MB cap for secondary historical pass
+const MAX_ADOPTION_ARCHIVE_BYTES = 15 * 1024 * 1024; // 15 MB cap per tarball in 12-month adoption pass
 
-async function fetchOneMonthAgoLanguageSnapshot(
+interface ParsedSnapshotStats {
+  sha: string;
+  totalLines: number;
+  codeLines: number;
+  languages: Array<{
+    name: string;
+    color: string;
+    lines: number;
+    codeLines: number;
+    files: number;
+    percentage: number;
+  }>;
+  trackedFilePaths: Map<string, Set<string>>;
+}
+
+function createCurrentSnapshotStats(
+  sha: string,
+  languages: LanguageStat[],
+  filesList: AnalyzedFile[],
+  totalLines: number,
+  codeLines: number,
+  trackedLanguageNames: Set<string>
+): ParsedSnapshotStats {
+  const trackedFilePaths = new Map<string, Set<string>>();
+  for (const name of trackedLanguageNames) {
+    trackedFilePaths.set(name, new Set<string>());
+  }
+  for (const file of filesList) {
+    if (trackedLanguageNames.has(file.language)) {
+      trackedFilePaths.get(file.language)?.add(file.path);
+    }
+  }
+
+  return {
+    sha,
+    totalLines,
+    codeLines,
+    languages: languages.map((item) => ({
+      name: item.name,
+      color: item.color,
+      lines: item.lines,
+      codeLines: item.codeLines,
+      files: item.files,
+      percentage: item.percentage,
+    })),
+    trackedFilePaths,
+  };
+}
+
+async function parseSnapshotArchiveAtSha(
   owner: string,
   repo: string,
-  oneMonthAgoRef: CommitRef,
-  latestSha: string | null,
-  currentLanguages: LanguageStat[],
-  currentTotalLines: number,
-  currentCodeLines: number,
+  sha: string,
+  maxBytes: number,
+  timeoutMs: number,
+  trackedLanguageNames: Set<string>,
   parentSignal: AbortSignal
-): Promise<HistoricalLanguageSnapshot | null> {
-  if (!VALID_SHA_RE.test(oneMonthAgoRef.sha)) return null;
-
-  // If no commits occurred in the last 30 days, historical distribution equals current
-  if (latestSha && oneMonthAgoRef.sha === latestSha) {
-    return {
-      snapshotCommitSha: oneMonthAgoRef.sha,
-      snapshotDate: oneMonthAgoRef.date,
-      totalLines: currentTotalLines,
-      codeLines: currentCodeLines,
-      languages: currentLanguages.slice(0, 12).map((item) => ({
-        name: item.name,
-        color: item.color,
-        lines: item.lines,
-        codeLines: item.codeLines,
-        percentage: item.percentage,
-      })),
-    };
-  }
+): Promise<ParsedSnapshotStats | null> {
+  if (!VALID_SHA_RE.test(sha)) return null;
 
   const histController = new AbortController();
   const onParentAbort = () => histController.abort();
   parentSignal.addEventListener('abort', onParentAbort, { once: true });
-  const timeoutId = setTimeout(() => histController.abort(), 15000);
+  const timeoutId = setTimeout(() => histController.abort(), timeoutMs);
 
   try {
     const safeOwner = encodeURIComponent(owner);
     const safeRepo = encodeURIComponent(repo);
     const archiveUrl = `https://codeload.github.com/${safeOwner}/${safeRepo}/tar.gz/${encodeURIComponent(
-      oneMonthAgoRef.sha
+      sha
     )}`;
 
     const resp = await fetch(archiveUrl, {
@@ -381,15 +469,19 @@ async function fetchOneMonthAgoLanguageSnapshot(
 
     const contentLengthHeader = resp.headers.get('content-length');
     const headerBytes = contentLengthHeader ? Number(contentLengthHeader) : 0;
-    if (headerBytes > MAX_HISTORICAL_ARCHIVE_BYTES) return null;
+    if (headerBytes > maxBytes) return null;
 
     let histBytes = 0;
     let histTotalLines = 0;
     let histCodeLines = 0;
     const histLangAgg = new Map<
       string,
-      { name: string; color: string; lines: number; codeLines: number }
+      { name: string; color: string; lines: number; codeLines: number; files: number }
     >();
+    const trackedFilePaths = new Map<string, Set<string>>();
+    for (const name of trackedLanguageNames) {
+      trackedFilePaths.set(name, new Set<string>());
+    }
 
     const nodeStream = Readable.fromWeb(
       resp.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>
@@ -454,16 +546,22 @@ async function fetchOneMonthAgoLanguageSnapshot(
         histTotalLines += counts.lines;
         histCodeLines += counts.codeLines;
 
+        if (trackedLanguageNames.has(lang.name)) {
+          trackedFilePaths.get(lang.name)?.add(relativePath);
+        }
+
         const existing = histLangAgg.get(lang.name);
         if (existing) {
           existing.lines += counts.lines;
           existing.codeLines += counts.codeLines;
+          existing.files += 1;
         } else {
           histLangAgg.set(lang.name, {
             name: lang.name,
             color: lang.color,
             lines: counts.lines,
             codeLines: counts.codeLines,
+            files: 1,
           });
         }
         next();
@@ -475,7 +573,7 @@ async function fetchOneMonthAgoLanguageSnapshot(
     await new Promise<void>((resolve, reject) => {
       nodeStream.on('data', (chunk: Buffer) => {
         histBytes += chunk.length;
-        if (histBytes > MAX_HISTORICAL_ARCHIVE_BYTES) {
+        if (histBytes > maxBytes) {
           histController.abort();
           nodeStream.destroy();
           gunzip.destroy();
@@ -502,16 +600,677 @@ async function fetchOneMonthAgoLanguageSnapshot(
       .sort((a, b) => b.lines - a.lines);
 
     return {
-      snapshotCommitSha: oneMonthAgoRef.sha,
-      snapshotDate: oneMonthAgoRef.date,
+      sha,
       totalLines: histTotalLines,
       codeLines: histCodeLines,
-      languages: histLanguages.slice(0, 15),
+      languages: histLanguages,
+      trackedFilePaths,
     };
   } catch {
     return null;
   } finally {
     clearTimeout(timeoutId);
+    parentSignal.removeEventListener('abort', onParentAbort);
+  }
+}
+
+function buildSnapshotFromCache(
+  cache: Map<string, Promise<ParsedSnapshotStats | null>>,
+  owner: string,
+  repo: string,
+  sha: string,
+  maxBytes: number,
+  timeoutMs: number,
+  trackedLanguageNames: Set<string>,
+  parentSignal: AbortSignal
+): Promise<ParsedSnapshotStats | null> {
+  const existing = cache.get(sha);
+  if (existing) return existing;
+  const promise = parseSnapshotArchiveAtSha(
+    owner,
+    repo,
+    sha,
+    maxBytes,
+    timeoutMs,
+    trackedLanguageNames,
+    parentSignal
+  );
+  cache.set(sha, promise);
+  return promise;
+}
+
+async function fetchOneMonthAgoLanguageSnapshot(
+  owner: string,
+  repo: string,
+  oneMonthAgoRef: CommitRef,
+  latestSha: string | null,
+  currentLanguages: LanguageStat[],
+  currentTotalLines: number,
+  currentCodeLines: number,
+  snapshotCache: Map<string, Promise<ParsedSnapshotStats | null>>,
+  trackedLanguageNames: Set<string>,
+  parentSignal: AbortSignal
+): Promise<HistoricalLanguageSnapshot | null> {
+  if (!VALID_SHA_RE.test(oneMonthAgoRef.sha)) return null;
+
+  // If no commits occurred in the last 30 days, historical distribution equals current
+  if (latestSha && oneMonthAgoRef.sha === latestSha) {
+    return {
+      snapshotCommitSha: oneMonthAgoRef.sha,
+      snapshotDate: oneMonthAgoRef.date,
+      totalLines: currentTotalLines,
+      codeLines: currentCodeLines,
+      languages: currentLanguages.slice(0, 12).map((item) => ({
+        name: item.name,
+        color: item.color,
+        lines: item.lines,
+        codeLines: item.codeLines,
+        percentage: item.percentage,
+      })),
+    };
+  }
+
+  const parsed = await buildSnapshotFromCache(
+    snapshotCache,
+    owner,
+    repo,
+    oneMonthAgoRef.sha,
+    MAX_HISTORICAL_ARCHIVE_BYTES,
+    15000,
+    trackedLanguageNames,
+    parentSignal
+  );
+
+  if (!parsed) return null;
+
+  return {
+    snapshotCommitSha: oneMonthAgoRef.sha,
+    snapshotDate: oneMonthAgoRef.date,
+    totalLines: parsed.totalLines,
+    codeLines: parsed.codeLines,
+    languages: parsed.languages.slice(0, 15).map((item) => ({
+      name: item.name,
+      color: item.color,
+      lines: item.lines,
+      codeLines: item.codeLines,
+      percentage: item.percentage,
+    })),
+  };
+}
+
+function classifyAdoptionTrend(
+  startCodeLines: number,
+  endCodeLines: number,
+  startPercentage: number,
+  endPercentage: number,
+  createdFiles12m: number
+): 'increasing' | 'decreasing' | 'stable' {
+  const deltaCodeLines = endCodeLines - startCodeLines;
+  const deltaPercentage = endPercentage - startPercentage;
+
+  if (startCodeLines === 0 && endCodeLines > 0) {
+    return 'increasing';
+  }
+  if (startCodeLines === 0 && endCodeLines === 0) {
+    return 'stable';
+  }
+
+  const relGrowth = deltaCodeLines / Math.max(1, startCodeLines);
+  if (
+    deltaCodeLines > 0 &&
+    (relGrowth >= 0.03 ||
+      deltaPercentage >= 0.4 ||
+      deltaCodeLines >= 50 ||
+      createdFiles12m >= 2)
+  ) {
+    return 'increasing';
+  }
+  if (
+    deltaCodeLines < 0 &&
+    (relGrowth <= -0.03 || deltaPercentage <= -0.4 || deltaCodeLines <= -50)
+  ) {
+    return 'decreasing';
+  }
+  if (deltaCodeLines === 0) {
+    if (deltaPercentage >= 0.4) return 'increasing';
+    if (deltaPercentage <= -0.4) return 'decreasing';
+  }
+  return 'stable';
+}
+
+function buildLanguageAdoptionSummary(
+  top5: LanguageStat[],
+  months: LanguageAdoptionMonth[]
+): LanguageAdoptionSummaryItem[] {
+  const firstMonth = months[0];
+  const lastMonth = months[months.length - 1];
+
+  return top5.map((lang) => {
+    const startPt = firstMonth?.languages[lang.name];
+    const endPt = lastMonth?.languages[lang.name];
+    const startCodeLines = startPt?.codeLines ?? 0;
+    const endCodeLines = endPt?.codeLines ?? lang.codeLines;
+    const deltaCodeLines = endCodeLines - startCodeLines;
+    const startPercentage = Number((startPt?.percentage ?? 0).toFixed(2));
+    const endPercentage = Number((endPt?.percentage ?? lang.percentage).toFixed(2));
+    const deltaPercentage = Number((endPercentage - startPercentage).toFixed(2));
+    const startFiles = startPt?.files ?? 0;
+    const endFiles = endPt?.files ?? lang.files;
+    const createdFiles12m = months.reduce(
+      (sum, m) => sum + (m.languages[lang.name]?.newFiles ?? 0),
+      0
+    );
+
+    return {
+      name: lang.name,
+      color: lang.color,
+      startCodeLines,
+      endCodeLines,
+      deltaCodeLines,
+      startPercentage,
+      endPercentage,
+      deltaPercentage,
+      startFiles,
+      endFiles,
+      createdFiles12m,
+      trend: classifyAdoptionTrend(
+        startCodeLines,
+        endCodeLines,
+        startPercentage,
+        endPercentage,
+        createdFiles12m
+      ),
+    };
+  });
+}
+
+async function fetchCommitShaBeforeDate(
+  safeOwner: string,
+  safeRepo: string,
+  encodedBranch: string,
+  untilIso: string,
+  signal: AbortSignal
+): Promise<CommitRef | null> {
+  try {
+    const url = `https://api.github.com/repos/${safeOwner}/${safeRepo}/commits?sha=${encodedBranch}&until=${encodeURIComponent(
+      untilIso
+    )}&per_page=1`;
+    const resp = await fetch(url, {
+      signal,
+      headers: buildGitHubHeaders(),
+    });
+    if (!resp.ok) return null;
+    const commits = (await resp.json()) as Array<{
+      sha?: string;
+      commit?: {
+        author?: { date?: string };
+        committer?: { date?: string };
+      };
+    }>;
+    const first = Array.isArray(commits) ? commits[0] : undefined;
+    const dateStr = first?.commit?.author?.date ?? first?.commit?.committer?.date;
+    const ms = dateStr ? Date.parse(dateStr) : NaN;
+    if (first?.sha && VALID_SHA_RE.test(first.sha) && dateStr && Number.isFinite(ms)) {
+      return { sha: first.sha, date: dateStr, ms };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchFileCreationMonthIndices(
+  owner: string,
+  repo: string,
+  branch: string,
+  top5: LanguageStat[],
+  filesList: AnalyzedFile[],
+  monthBuckets: Array<{ monthKey: string; startMs: number; endMs: number }>,
+  parentSignal: AbortSignal
+): Promise<LanguageAdoptionTrend | null> {
+  const safeOwner = encodeURIComponent(owner);
+  const safeRepo = encodeURIComponent(repo);
+  const encodedBranch = encodeURIComponent(branch);
+
+  const selectedFiles: Array<{ path: string; language: string; codeLines: number; lines: number }> = [];
+  for (const lang of top5) {
+    const candidates = filesList
+      .filter((f) => f.language === lang.name)
+      .slice(0, 4);
+    for (const f of candidates) {
+      selectedFiles.push({
+        path: f.path,
+        language: f.language,
+        codeLines: f.codeLines,
+        lines: f.lines,
+      });
+    }
+  }
+
+  if (selectedFiles.length === 0) return null;
+
+  const controller = new AbortController();
+  const onParentAbort = () => controller.abort();
+  parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  const timeoutId = setTimeout(() => controller.abort(), 14000);
+
+  try {
+    const creationTimes = new Map<string, number>();
+    const BATCH_SIZE = 5;
+
+    for (let i = 0; i < selectedFiles.length; i += BATCH_SIZE) {
+      if (controller.signal.aborted) break;
+      const batch = selectedFiles.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (item) => {
+          try {
+            const url = `https://api.github.com/repos/${safeOwner}/${safeRepo}/commits?sha=${encodedBranch}&path=${encodeURIComponent(
+              item.path
+            )}&per_page=100`;
+            const resp = await fetch(url, {
+              signal: controller.signal,
+              headers: buildGitHubHeaders(),
+            });
+            if (!resp.ok) return;
+            const commits = (await resp.json()) as Array<{
+              commit?: {
+                author?: { date?: string };
+                committer?: { date?: string };
+              };
+            }>;
+            if (!Array.isArray(commits) || commits.length === 0) return;
+            const earliest = commits[commits.length - 1];
+            const dateStr =
+              earliest?.commit?.author?.date ?? earliest?.commit?.committer?.date;
+            const ms = dateStr ? Date.parse(dateStr) : NaN;
+            if (Number.isFinite(ms)) {
+              creationTimes.set(item.path, ms);
+            }
+          } catch {
+            // Skip failed single file lookup
+          }
+        })
+      );
+    }
+
+    if (creationTimes.size === 0) return null;
+
+    const months: LanguageAdoptionMonth[] = [];
+    const totalCurrentCodeLines = top5.reduce((s, l) => s + l.codeLines, 0);
+
+    for (let mIdx = 0; mIdx < monthBuckets.length; mIdx++) {
+      const bucket = monthBuckets[mIdx];
+      const monthLangRaw = new Map<
+        string,
+        { codeLines: number; lines: number; files: number; newFiles: number }
+      >();
+
+      let monthTotalCode = 0;
+      for (const lang of top5) {
+        const langFiles = selectedFiles.filter((f) => f.language === lang.name);
+        const sampledTotalCode = langFiles.reduce((s, f) => s + Math.max(1, f.codeLines), 0);
+
+        let cumulativeRatio = 1;
+        let newlyCreatedCount = 0;
+        let existingSampleCount = 0;
+
+        if (langFiles.length > 0 && sampledTotalCode > 0) {
+          let existingCodeWeight = 0;
+          for (const f of langFiles) {
+            const createdMs = creationTimes.get(f.path);
+            if (createdMs === undefined || createdMs <= bucket.endMs) {
+              existingCodeWeight += Math.max(1, f.codeLines);
+              existingSampleCount += 1;
+            }
+            if (
+              createdMs !== undefined &&
+              createdMs >= bucket.startMs &&
+              createdMs <= bucket.endMs
+            ) {
+              newlyCreatedCount += 1;
+            }
+          }
+          cumulativeRatio = existingCodeWeight / sampledTotalCode;
+        }
+
+        const estCodeLines = Math.round(lang.codeLines * cumulativeRatio);
+        const estLines = Math.round(lang.lines * cumulativeRatio);
+        const estFiles =
+          langFiles.length > 0
+            ? Math.round(lang.files * (existingSampleCount / langFiles.length))
+            : lang.files;
+        const estNewFiles =
+          langFiles.length > 0
+            ? Math.round((newlyCreatedCount / langFiles.length) * lang.files)
+            : 0;
+
+        monthTotalCode += estCodeLines;
+        monthLangRaw.set(lang.name, {
+          codeLines: estCodeLines,
+          lines: estLines,
+          files: estFiles,
+          newFiles: estNewFiles,
+        });
+      }
+
+      const top5CurrentShare = top5.reduce((s, l) => s + l.percentage, 0);
+      const denom = Math.max(1, monthTotalCode);
+      const langRecord: Record<string, MonthlyLanguagePoint> = {};
+      for (const lang of top5) {
+        const raw = monthLangRaw.get(lang.name)!;
+        langRecord[lang.name] = {
+          lines: raw.lines,
+          codeLines: raw.codeLines,
+          files: raw.files,
+          newFiles: raw.newFiles,
+          percentage:
+            monthTotalCode > 0
+              ? Number(((raw.codeLines / denom) * top5CurrentShare).toFixed(2))
+              : 0,
+        };
+      }
+
+      // Ensure last month matches exact current percentages & totals
+      if (mIdx === monthBuckets.length - 1) {
+        for (const lang of top5) {
+          const prevNew = langRecord[lang.name]?.newFiles ?? 0;
+          langRecord[lang.name] = {
+            lines: lang.lines,
+            codeLines: lang.codeLines,
+            files: lang.files,
+            newFiles: prevNew,
+            percentage: lang.percentage,
+          };
+        }
+      }
+
+      months.push({
+        monthKey: bucket.monthKey,
+        timestamp: new Date(bucket.endMs).toISOString(),
+        languages: langRecord,
+      });
+    }
+
+    return {
+      source: 'file-creations',
+      topLanguages: top5.map((l) => ({ name: l.name, color: l.color })),
+      months,
+      summary: buildLanguageAdoptionSummary(top5, months),
+    };
+  } finally {
+    clearTimeout(timeoutId);
+    parentSignal.removeEventListener('abort', onParentAbort);
+  }
+}
+
+async function fetchLanguageAdoptionTrend(
+  owner: string,
+  repo: string,
+  branch: string,
+  bytesDownloaded: number,
+  currentLanguages: LanguageStat[],
+  filesList: AnalyzedFile[],
+  currentTotalLines: number,
+  currentCodeLines: number,
+  latestCommitSha: string | null,
+  commitRefs: CommitRef[],
+  commitsSampledCount: number,
+  rateLimitRemaining: number | null,
+  snapshotCache: Map<string, Promise<ParsedSnapshotStats | null>>,
+  parentSignal: AbortSignal
+): Promise<LanguageAdoptionTrend | null> {
+  const top5 = currentLanguages.slice(0, 5);
+  if (top5.length === 0) return null;
+
+  const now = new Date();
+  const monthBuckets: Array<{ monthKey: string; startMs: number; endMs: number }> = [];
+  for (let offset = 11; offset >= 0; offset--) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - offset, 1));
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const monthKey = `${y}-${String(m + 1).padStart(2, '0')}`;
+    const startMs = Date.UTC(y, m, 1, 0, 0, 0, 0);
+    const endMs =
+      offset === 0
+        ? now.getTime()
+        : Date.UTC(y, m + 1, 1, 0, 0, 0, 0) - 1;
+    monthBuckets.push({ monthKey, startMs, endMs });
+  }
+
+  const hasToken = Boolean(process.env.GITHUB_TOKEN?.trim());
+  const hasHealthyRateLimit =
+    hasToken || rateLimitRemaining === null || rateLimitRemaining >= 20;
+
+  // Large archive fallback (> 15 MB): analyze file creation timestamps via path commit history
+  if (bytesDownloaded > MAX_ADOPTION_ARCHIVE_BYTES) {
+    if (!hasHealthyRateLimit) return null;
+    return fetchFileCreationMonthIndices(
+      owner,
+      repo,
+      branch,
+      top5,
+      filesList,
+      monthBuckets,
+      parentSignal
+    );
+  }
+
+  const trackedNames = new Set(top5.map((l) => l.name));
+  const currentStats = createCurrentSnapshotStats(
+    latestCommitSha || 'HEAD',
+    currentLanguages,
+    filesList,
+    currentTotalLines,
+    currentCodeLines,
+    trackedNames
+  );
+  if (latestCommitSha) {
+    snapshotCache.set(latestCommitSha, Promise.resolve(currentStats));
+  }
+
+  // Sort commitRefs newest -> oldest
+  const sortedCommits = [...commitRefs].sort((a, b) => b.ms - a.ms);
+  const oldestSampledMs =
+    sortedCommits.length > 0 ? sortedCommits[sortedCommits.length - 1].ms : null;
+  const fullHistoryInMemory = commitsSampledCount < 100;
+
+  const monthShaTargets: Array<string | null> = new Array(12).fill(null);
+  monthShaTargets[11] = currentStats.sha;
+
+  const uncoveredIndices: number[] = [];
+  for (let i = 0; i < 11; i++) {
+    const endMs = monthBuckets[i].endMs;
+    const match = sortedCommits.find((c) => c.ms <= endMs);
+    if (match) {
+      monthShaTargets[i] = match.sha;
+    } else if (fullHistoryInMemory) {
+      // Repository did not have commits yet at this month-end
+      monthShaTargets[i] = null;
+    } else {
+      uncoveredIndices.push(i);
+    }
+  }
+
+  if (uncoveredIndices.length > 0) {
+    const safeOwner = encodeURIComponent(owner);
+    const safeRepo = encodeURIComponent(repo);
+    const encodedBranch = encodeURIComponent(branch);
+
+    const indicesToQuery =
+      hasHealthyRateLimit
+        ? uncoveredIndices
+        : uncoveredIndices.filter((idx) => idx === 0 || idx === 2 || idx === 5 || idx === 8);
+
+    const anchorController = new AbortController();
+    const onAbort = () => anchorController.abort();
+    parentSignal.addEventListener('abort', onAbort, { once: true });
+    const anchorTimeout = setTimeout(() => anchorController.abort(), 8000);
+
+    try {
+      const queried = await Promise.all(
+        indicesToQuery.map(async (idx) => {
+          const ref = await fetchCommitShaBeforeDate(
+            safeOwner,
+            safeRepo,
+            encodedBranch,
+            new Date(monthBuckets[idx].endMs).toISOString(),
+            anchorController.signal
+          );
+          return { idx, ref };
+        })
+      );
+
+      for (const { idx, ref } of queried) {
+        monthShaTargets[idx] = ref ? ref.sha : null;
+      }
+
+      // If rate limit caused sparse quarterly anchors, carry forward/back nearest anchor
+      if (!hasHealthyRateLimit) {
+        let lastKnown: string | null = null;
+        for (let i = 0; i < 11; i++) {
+          if (monthShaTargets[i]) {
+            lastKnown = monthShaTargets[i];
+          } else if (
+            lastKnown &&
+            (!oldestSampledMs || monthBuckets[i].endMs >= oldestSampledMs)
+          ) {
+            monthShaTargets[i] = lastKnown;
+          }
+        }
+      }
+    } finally {
+      clearTimeout(anchorTimeout);
+      parentSignal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  const uniqueShasToFetch = Array.from(
+    new Set(
+      monthShaTargets.filter(
+        (sha): sha is string => Boolean(sha) && sha !== currentStats.sha
+      )
+    )
+  );
+
+  const adoptionController = new AbortController();
+  const onParentAbort = () => adoptionController.abort();
+  parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  const totalTimeoutId = setTimeout(() => adoptionController.abort(), 16000);
+
+  try {
+    const CONCURRENCY = 3;
+    for (let i = 0; i < uniqueShasToFetch.length; i += CONCURRENCY) {
+      if (adoptionController.signal.aborted) break;
+      const batch = uniqueShasToFetch.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        batch.map((sha) =>
+          buildSnapshotFromCache(
+            snapshotCache,
+            owner,
+            repo,
+            sha,
+            MAX_ADOPTION_ARCHIVE_BYTES,
+            12000,
+            trackedNames,
+            adoptionController.signal
+          )
+        )
+      );
+    }
+
+    const resolvedStats: Array<ParsedSnapshotStats | null> = await Promise.all(
+      monthShaTargets.map(async (sha, idx) => {
+        if (!sha) return null;
+        if (idx === 11 || sha === currentStats.sha) return currentStats;
+        const cached = snapshotCache.get(sha);
+        return cached ? await cached : null;
+      })
+    );
+
+    // Fill transient fetch failures (where SHA existed) from nearest resolved snapshot
+    for (let idx = 0; idx < 12; idx++) {
+      if (monthShaTargets[idx] && !resolvedStats[idx]) {
+        let fallback: ParsedSnapshotStats | null = null;
+        for (let offset = 1; offset < 12; offset++) {
+          if (idx - offset >= 0 && resolvedStats[idx - offset]) {
+            fallback = resolvedStats[idx - offset];
+            break;
+          }
+          if (idx + offset < 12 && resolvedStats[idx + offset]) {
+            fallback = resolvedStats[idx + offset];
+            break;
+          }
+        }
+        resolvedStats[idx] = fallback;
+      }
+    }
+
+    const seenPathsByLang = new Map<string, Set<string>>();
+    for (const lang of top5) {
+      seenPathsByLang.set(lang.name, new Set<string>());
+    }
+
+    const months: LanguageAdoptionMonth[] = [];
+    const repoCreatedInMonthZero =
+      fullHistoryInMemory &&
+      oldestSampledMs !== null &&
+      oldestSampledMs >= monthBuckets[0].startMs;
+
+    for (let idx = 0; idx < 12; idx++) {
+      const bucket = monthBuckets[idx];
+      const stats = resolvedStats[idx];
+      const langRecord: Record<string, MonthlyLanguagePoint> = {};
+
+      const langMap = new Map(
+        (stats?.languages ?? []).map((item) => [item.name, item])
+      );
+
+      for (const lang of top5) {
+        const entry = langMap.get(lang.name);
+        const currentPaths = stats?.trackedFilePaths.get(lang.name) ?? new Set<string>();
+        const seen = seenPathsByLang.get(lang.name)!;
+
+        let newFiles = 0;
+        if (stats) {
+          if (idx === 0 && !repoCreatedInMonthZero) {
+            for (const p of currentPaths) {
+              seen.add(p);
+            }
+            newFiles = 0;
+          } else {
+            for (const p of currentPaths) {
+              if (!seen.has(p)) {
+                seen.add(p);
+                newFiles += 1;
+              }
+            }
+          }
+        }
+
+        langRecord[lang.name] = {
+          lines: entry?.lines ?? 0,
+          codeLines: entry?.codeLines ?? 0,
+          files: entry?.files ?? 0,
+          newFiles,
+          percentage: entry?.percentage ?? 0,
+        };
+      }
+
+      months.push({
+        monthKey: bucket.monthKey,
+        timestamp: new Date(bucket.endMs).toISOString(),
+        languages: langRecord,
+      });
+    }
+
+    return {
+      source: 'snapshots',
+      topLanguages: top5.map((l) => ({ name: l.name, color: l.color })),
+      months,
+      summary: buildLanguageAdoptionSummary(top5, months),
+    };
+  } finally {
+    clearTimeout(totalTimeoutId);
     parentSignal.removeEventListener('abort', onParentAbort);
   }
 }
@@ -581,6 +1340,45 @@ function getCommentStyle(languageName: string): CommentStyle {
   return 'c';
 }
 
+const NON_LOGIC_COMPLEXITY_LANGUAGES = new Set([
+  'JSON',
+  'Text',
+  'CSV',
+  'Markdown',
+  'MDX',
+  'reStructuredText',
+  'Other',
+  'YAML',
+  'TOML',
+  'XML',
+  'SVG',
+  'HTML',
+  'CSS',
+  'SCSS',
+  'Sass',
+  'Less',
+  'Ignore List',
+  'Git Config',
+  'EditorConfig',
+  'Config',
+  'INI',
+  'GraphQL',
+]);
+
+const INDENT_SCOPED_LANGUAGES = new Set([
+  'Python',
+  'Ruby',
+  'Elixir',
+  'Haskell',
+  'CoffeeScript',
+  'Nim',
+]);
+
+function countRegexMatches(line: string, pattern: RegExp): number {
+  const matches = line.match(pattern);
+  return matches ? matches.length : 0;
+}
+
 function analyzeSourceBuffer(
   buffer: Buffer,
   languageName: string
@@ -590,6 +1388,9 @@ function analyzeSourceBuffer(
   blankLines: number;
   commentLines: number;
   commentCapable: boolean;
+  complexity?: number;
+  maxNesting?: number;
+  functionCount?: number;
 } {
   if (buffer.length === 0) {
     return {
@@ -603,6 +1404,8 @@ function analyzeSourceBuffer(
 
   const style = getCommentStyle(languageName);
   const commentCapable = style !== 'none';
+  const trackComplexity = !NON_LOGIC_COMPLEXITY_LANGUAGES.has(languageName);
+  const useIndentNesting = INDENT_SCOPED_LANGUAGES.has(languageName);
   const text = buffer.toString('utf8');
   const rawLines = text.split('\n');
   const lines =
@@ -615,8 +1418,14 @@ function analyzeSourceBuffer(
   let commentLines = 0;
   let inBlockComment = false;
 
+  let complexity = 1;
+  let functionCount = 0;
+  let maxNesting = 0;
+  let braceDepth = 0;
+
   for (let i = 0; i < lines; i++) {
-    const trimmed = rawLines[i].trim();
+    const rawLine = rawLines[i];
+    const trimmed = rawLine.trim();
     if (trimmed.length === 0) {
       blankLines += 1;
       continue;
@@ -624,57 +1433,111 @@ function analyzeSourceBuffer(
 
     codeLines += 1;
 
-    if (!commentCapable) continue;
-
-    if (style === 'apl') {
-      if (trimmed.startsWith('⍝')) {
+    let isCommentLine = false;
+    if (commentCapable) {
+      if (style === 'apl') {
+        if (trimmed.startsWith('⍝')) {
+          commentLines += 1;
+          isCommentLine = true;
+        }
+      } else if (style === 'hash') {
+        if (trimmed.startsWith('#')) {
+          commentLines += 1;
+          isCommentLine = true;
+        }
+      } else if (style === 'dash') {
+        if (inBlockComment) {
+          commentLines += 1;
+          isCommentLine = true;
+          if (trimmed.includes('*/')) inBlockComment = false;
+        } else if (trimmed.startsWith('--')) {
+          commentLines += 1;
+          isCommentLine = true;
+        } else if (trimmed.startsWith('/*')) {
+          commentLines += 1;
+          isCommentLine = true;
+          if (!trimmed.includes('*/')) inBlockComment = true;
+        }
+      } else if (style === 'html') {
+        if (inBlockComment) {
+          commentLines += 1;
+          isCommentLine = true;
+          if (trimmed.includes('-->')) inBlockComment = false;
+        } else if (trimmed.startsWith('<!--')) {
+          commentLines += 1;
+          isCommentLine = true;
+          if (!trimmed.includes('-->')) inBlockComment = true;
+        }
+      } else if (inBlockComment) {
         commentLines += 1;
-      }
-      continue;
-    }
-
-    if (style === 'hash') {
-      if (trimmed.startsWith('#')) {
-        commentLines += 1;
-      }
-      continue;
-    }
-
-    if (style === 'dash') {
-      if (inBlockComment) {
-        commentLines += 1;
+        isCommentLine = true;
         if (trimmed.includes('*/')) inBlockComment = false;
-      } else if (trimmed.startsWith('--')) {
+      } else if (
+        trimmed.startsWith('//') ||
+        (languageName === 'PHP' && trimmed.startsWith('#'))
+      ) {
         commentLines += 1;
+        isCommentLine = true;
       } else if (trimmed.startsWith('/*')) {
         commentLines += 1;
+        isCommentLine = true;
         if (!trimmed.includes('*/')) inBlockComment = true;
       }
-      continue;
     }
 
-    if (style === 'html') {
-      if (inBlockComment) {
-        commentLines += 1;
-        if (trimmed.includes('-->')) inBlockComment = false;
-      } else if (trimmed.startsWith('<!--')) {
-        commentLines += 1;
-        if (!trimmed.includes('-->')) inBlockComment = true;
-      }
-      continue;
+    if (!trackComplexity || isCommentLine) continue;
+
+    // Strip quoted string literals and trailing single-line comments before scanning tokens
+    let sanitized = trimmed.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, '""');
+    if (style === 'apl') {
+      const commentIdx = sanitized.indexOf('⍝');
+      if (commentIdx >= 0) sanitized = sanitized.slice(0, commentIdx);
+    } else if (style === 'hash') {
+      const commentIdx = sanitized.indexOf('#');
+      if (commentIdx >= 0) sanitized = sanitized.slice(0, commentIdx);
+    } else if (style === 'c') {
+      const commentIdx = sanitized.indexOf('//');
+      if (commentIdx >= 0) sanitized = sanitized.slice(0, commentIdx);
+    } else if (style === 'dash') {
+      const commentIdx = sanitized.indexOf('--');
+      if (commentIdx >= 0) sanitized = sanitized.slice(0, commentIdx);
     }
 
-    if (inBlockComment) {
-      commentLines += 1;
-      if (trimmed.includes('*/')) inBlockComment = false;
-    } else if (
-      trimmed.startsWith('//') ||
-      (languageName === 'PHP' && trimmed.startsWith('#'))
-    ) {
-      commentLines += 1;
-    } else if (trimmed.startsWith('/*')) {
-      commentLines += 1;
-      if (!trimmed.includes('*/')) inBlockComment = true;
+    if (languageName === 'APL') {
+      complexity += countRegexMatches(
+        sanitized,
+        /:(?:If|ElseIf|For|While|Repeat|Select|Case|Trap)\b/gi
+      );
+      complexity += countRegexMatches(sanitized, /→/g);
+      complexity += countRegexMatches(sanitized, /(?<=\S\s*):(?=\s*\S)/g);
+      functionCount += countRegexMatches(sanitized, /∇|\{/g);
+    } else {
+      complexity += countRegexMatches(
+        sanitized,
+        /\b(?:if|else\s+if|elif|elsif|case|catch|except|rescue|when|for|foreach|while|until|match)\b/g
+      );
+      complexity += countRegexMatches(sanitized, /&&|\|\||\?\?/g);
+      complexity += countRegexMatches(sanitized, /\s\?\s/g);
+      functionCount += countRegexMatches(
+        sanitized,
+        /\b(?:function|def|fn|func|sub|proc)\b|=>/g
+      );
+    }
+
+    if (useIndentNesting) {
+      const leadingMatch = rawLine.match(/^[ \t]*/);
+      const leadingStr = leadingMatch ? leadingMatch[0] : '';
+      const spaces = leadingStr.replace(/\t/g, '    ').length;
+      const step =
+        languageName === 'Ruby' || languageName === 'Elixir' ? 2 : 4;
+      const depth = Math.min(16, Math.floor(spaces / step));
+      if (depth > maxNesting) maxNesting = depth;
+    } else {
+      const opens = countRegexMatches(sanitized, /\{/g);
+      const closes = countRegexMatches(sanitized, /\}/g);
+      braceDepth = Math.max(0, braceDepth + opens);
+      if (braceDepth > maxNesting) maxNesting = Math.min(16, braceDepth);
+      braceDepth = Math.max(0, braceDepth - closes);
     }
   }
 
@@ -684,6 +1547,146 @@ function analyzeSourceBuffer(
     blankLines,
     commentLines,
     commentCapable,
+    ...(trackComplexity
+      ? {
+          complexity,
+          maxNesting,
+          functionCount: Math.max(functionCount, complexity > 1 ? 1 : 0),
+        }
+      : {}),
+  };
+}
+
+function buildFileRefactoringRecommendation(
+  file: AnalyzedFile
+): RefactoringRecommendation | null {
+  const complexity = file.complexity ?? 1;
+  const maxNesting = file.maxNesting ?? 0;
+  const functionCount = file.functionCount ?? 1;
+
+  const isFlagged =
+    complexity >= 15 ||
+    (maxNesting >= 5 && file.codeLines >= 100) ||
+    (file.codeLines >= 450 && complexity >= 10);
+
+  if (!isFlagged) return null;
+
+  const severity: RefactoringRecommendation['severity'] =
+    complexity >= 50 || (maxNesting >= 7 && complexity >= 25)
+      ? 'critical'
+      : complexity >= 25 || maxNesting >= 5
+        ? 'high'
+        : 'moderate';
+
+  const categories: RefactoringCategory[] = [];
+  if (maxNesting >= 4) {
+    categories.push('flatten-nesting');
+  }
+  if (complexity >= 18 && complexity / Math.max(1, functionCount) >= 7) {
+    categories.push('extract-functions');
+  }
+  if (complexity >= 22) {
+    categories.push('simplify-conditionals');
+  }
+  if (file.codeLines >= 350 || file.sizeBytes >= 40 * 1024) {
+    categories.push('split-module');
+  }
+  if (
+    getCommentStyle(file.language) !== 'none' &&
+    (file.commentLines ?? 0) / Math.max(1, file.codeLines) < 0.05 &&
+    complexity >= 18
+  ) {
+    categories.push('add-documentation');
+  }
+
+  if (categories.length === 0) {
+    categories.push('extract-functions');
+  }
+
+  return {
+    path: file.path,
+    language: file.language,
+    color: file.color,
+    lines: file.lines,
+    codeLines: file.codeLines,
+    sizeBytes: file.sizeBytes,
+    complexity,
+    maxNesting,
+    functionCount,
+    severity,
+    categories: categories.slice(0, 3),
+  };
+}
+
+function computeComplexityMetrics(files: AnalyzedFile[]): ComplexityMetrics {
+  const logicFiles = files.filter((f) => typeof f.complexity === 'number');
+  const logicFilesCount = logicFiles.length;
+
+  if (logicFilesCount === 0) {
+    return {
+      score: 100,
+      avgComplexity: 1,
+      maxComplexity: 1,
+      highComplexityFilesCount: 0,
+      avgNestingDepth: 0,
+      logicFilesCount: 0,
+      recommendations: [],
+    };
+  }
+
+  let totalComplexity = 0;
+  let totalNesting = 0;
+  let maxComplexity = 1;
+  let highComplexityFilesCount = 0;
+  const recommendations: RefactoringRecommendation[] = [];
+
+  for (const f of logicFiles) {
+    const c = f.complexity ?? 1;
+    const n = f.maxNesting ?? 0;
+    totalComplexity += c;
+    totalNesting += n;
+    if (c > maxComplexity) maxComplexity = c;
+    if (c >= 15 || (n >= 5 && f.codeLines >= 100)) {
+      highComplexityFilesCount += 1;
+    }
+
+    const rec = buildFileRefactoringRecommendation(f);
+    if (rec) {
+      recommendations.push(rec);
+    }
+  }
+
+  recommendations.sort((a, b) => {
+    const rankA = a.complexity * 1.5 + a.maxNesting * 4 + a.codeLines / 60;
+    const rankB = b.complexity * 1.5 + b.maxNesting * 4 + b.codeLines / 60;
+    return rankB - rankA;
+  });
+
+  const avgComplexity = Number((totalComplexity / logicFilesCount).toFixed(1));
+  const avgNestingDepth = Number((totalNesting / logicFilesCount).toFixed(1));
+  const highRatio = highComplexityFilesCount / logicFilesCount;
+
+  const avgPenalty = Math.max(0, avgComplexity - 5) * 2.2;
+  const highRatioPenalty = highRatio * 95;
+  const nestingPenalty = Math.max(0, avgNestingDepth - 2.2) * 8;
+  const peakPenalty = Math.max(0, maxComplexity - 40) * 0.15;
+
+  const score = Math.max(
+    5,
+    Math.min(
+      100,
+      Math.round(100 - avgPenalty - highRatioPenalty - nestingPenalty - peakPenalty)
+    )
+  );
+
+  return {
+    score,
+    avgComplexity,
+    maxComplexity,
+    highComplexityFilesCount,
+    avgNestingDepth,
+    logicFilesCount,
+    recommendations: recommendations.slice(0, 8),
   };
 }
 
@@ -699,22 +1702,25 @@ function computeCodeHealth(
     ? Number(((totalCommentLines / commentCapableLines) * 100).toFixed(1))
     : 0;
 
-  let commentScore = 35;
+  let rawCommentScore = 35;
   if (commentDataAvailable) {
     if (commentRatioPct >= 10 && commentRatioPct <= 30) {
-      commentScore = 50;
+      rawCommentScore = 50;
     } else if (commentRatioPct < 10) {
-      commentScore = 15 + (commentRatioPct / 10) * 35;
+      rawCommentScore = 15 + (commentRatioPct / 10) * 35;
     } else {
-      commentScore = Math.max(25, 50 - ((commentRatioPct - 30) / 40) * 25);
+      rawCommentScore = Math.max(25, 50 - ((commentRatioPct - 30) / 40) * 25);
     }
   }
+
+  const complexity = computeComplexityMetrics(files);
 
   if (analyzedCount === 0) {
     return {
       score: 0,
       commentScore: 0,
       fileSizeScore: 0,
+      complexityScore: 0,
       commentLines: 0,
       commentCapableLines: 0,
       commentRatioPct: 0,
@@ -723,6 +1729,7 @@ function computeCodeHealth(
       medianFileSizeBytes: 0,
       oversizedFilesCount: 0,
       healthySizeFilesPct: 100,
+      complexity,
     };
   }
 
@@ -746,31 +1753,34 @@ function computeCodeHealth(
   const emptyRatio = emptyFilesCount / analyzedCount;
   const avgKb = avgFileSizeBytes / 1024;
 
-  let fileSizeScore = 50;
-  fileSizeScore -= Math.min(25, oversizedRatio * 125);
+  let rawFileSizeScore = 50;
+  rawFileSizeScore -= Math.min(25, oversizedRatio * 125);
   if (avgKb > 20) {
-    fileSizeScore -= Math.min(15, ((avgKb - 20) / 80) * 15);
+    rawFileSizeScore -= Math.min(15, ((avgKb - 20) / 80) * 15);
   }
   if (emptyRatio > 0.1) {
-    fileSizeScore -= Math.min(10, (emptyRatio - 0.1) * 50);
+    rawFileSizeScore -= Math.min(10, (emptyRatio - 0.1) * 50);
   }
-  fileSizeScore = Math.max(0, Math.min(50, fileSizeScore));
+  rawFileSizeScore = Math.max(0, Math.min(50, rawFileSizeScore));
 
   const healthySizeFilesPct = Number(
     (((analyzedCount - oversizedFilesCount) / analyzedCount) * 100).toFixed(1)
   );
 
-  const roundedCommentScore = Math.round(commentScore);
-  const roundedFileSizeScore = Math.round(fileSizeScore);
+  // Weighted Code Health breakdown: Comments (35) + File Size (35) + Cyclomatic Complexity (30) = 100
+  const commentScore = Math.round((rawCommentScore / 50) * 35);
+  const fileSizeScore = Math.round((rawFileSizeScore / 50) * 35);
+  const complexityScore = Math.round((complexity.score / 100) * 30);
   const score = Math.max(
     0,
-    Math.min(100, roundedCommentScore + roundedFileSizeScore)
+    Math.min(100, commentScore + fileSizeScore + complexityScore)
   );
 
   return {
     score,
-    commentScore: roundedCommentScore,
-    fileSizeScore: roundedFileSizeScore,
+    commentScore,
+    fileSizeScore,
+    complexityScore,
     commentLines: totalCommentLines,
     commentCapableLines,
     commentRatioPct,
@@ -779,6 +1789,7 @@ function computeCodeHealth(
     medianFileSizeBytes,
     oversizedFilesCount,
     healthySizeFilesPct,
+    complexity,
   };
 }
 
@@ -931,11 +1942,15 @@ async function analyzeRepositoryStream(
     let metadataRateLimited = false;
     let latestCommitSha: string | null = null;
     let oneMonthAgoRef: CommitRef | null = null;
+    let commitRefs: CommitRef[] = [];
+    let commitsSampledCount = 0;
+    let rateLimitRemaining: number | null = null;
 
     const metaResp = await fetch(metaUrl, {
       signal: abortController.signal,
       headers: buildGitHubHeaders(),
     });
+    rateLimitRemaining = parseRateLimitRemaining(metaResp.headers);
 
     if (metaResp.ok) {
       const json = (await metaResp.json()) as {
@@ -969,6 +1984,14 @@ async function analyzeRepositoryStream(
         activityOutcome.status === 'fulfilled' ? activityOutcome.value : null;
       latestCommitSha = activityFetch?.latestSha ?? null;
       oneMonthAgoRef = activityFetch?.oneMonthAgoRef ?? null;
+      commitRefs = activityFetch?.commitRefs ?? [];
+      commitsSampledCount = activityFetch?.commitsSampledCount ?? 0;
+      if (
+        activityFetch?.rateLimitRemaining !== null &&
+        activityFetch?.rateLimitRemaining !== undefined
+      ) {
+        rateLimitRemaining = activityFetch.rateLimitRemaining;
+      }
 
       metadata = {
         owner: json.owner?.login || owner,
@@ -1256,6 +2279,13 @@ async function analyzeRepositoryStream(
           codeLines: counts.codeLines,
           blankLines: counts.blankLines,
           commentLines: counts.commentLines,
+          ...(typeof counts.complexity === 'number'
+            ? {
+                complexity: counts.complexity,
+                maxNesting: counts.maxNesting,
+                functionCount: counts.functionCount,
+              }
+            : {}),
           sizeBytes: fullBuf.length,
         });
 
@@ -1324,18 +2354,52 @@ async function analyzeRepositoryStream(
       totalSizeBytes
     );
 
+    const snapshotCache = new Map<string, Promise<ParsedSnapshotStats | null>>();
+    const trackedTop5Names = new Set(languages.slice(0, 5).map((l) => l.name));
+
+    const [languageHistoryOutcome, languageAdoptionOutcome] =
+      await Promise.allSettled([
+        oneMonthAgoRef && bytesDownloaded <= MAX_HISTORICAL_ARCHIVE_BYTES
+          ? fetchOneMonthAgoLanguageSnapshot(
+              owner,
+              repo,
+              oneMonthAgoRef,
+              latestCommitSha,
+              languages,
+              totalLines,
+              codeLines,
+              snapshotCache,
+              trackedTop5Names,
+              abortController.signal
+            )
+          : Promise.resolve(null),
+        !metadataRateLimited && languages.length > 0
+          ? fetchLanguageAdoptionTrend(
+              owner,
+              repo,
+              metadata.defaultBranch,
+              bytesDownloaded,
+              languages,
+              filesList,
+              totalLines,
+              codeLines,
+              latestCommitSha,
+              commitRefs,
+              commitsSampledCount,
+              rateLimitRemaining,
+              snapshotCache,
+              abortController.signal
+            )
+          : Promise.resolve(null),
+      ]);
+
     const languageHistory =
-      oneMonthAgoRef && bytesDownloaded <= MAX_HISTORICAL_ARCHIVE_BYTES
-        ? await fetchOneMonthAgoLanguageSnapshot(
-            owner,
-            repo,
-            oneMonthAgoRef,
-            latestCommitSha,
-            languages,
-            totalLines,
-            codeLines,
-            abortController.signal
-          )
+      languageHistoryOutcome.status === 'fulfilled'
+        ? languageHistoryOutcome.value
+        : null;
+    const languageAdoption =
+      languageAdoptionOutcome.status === 'fulfilled'
+        ? languageAdoptionOutcome.value
         : null;
 
     if (clientClosed) return;
@@ -1361,6 +2425,7 @@ async function analyzeRepositoryStream(
       files: returnedFiles,
       analyzedAt: new Date().toISOString(),
       languageHistory,
+      languageAdoption,
     };
 
     sendSse(res, {

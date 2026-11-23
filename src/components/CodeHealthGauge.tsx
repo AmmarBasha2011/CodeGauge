@@ -81,11 +81,16 @@ export function CodeHealthGauge({ t, lang, health }: CodeHealthGaugeProps) {
 
   const commentBarWidthPct = Math.max(
     0,
-    Math.min(100, (health.commentScore / 50) * 100)
+    Math.min(100, (health.commentScore / 35) * 100)
   );
   const fileSizeBarWidthPct = Math.max(
     0,
-    Math.min(100, (health.fileSizeScore / 50) * 100)
+    Math.min(100, (health.fileSizeScore / 35) * 100)
+  );
+  const complexityScoreVal = health.complexityScore ?? 24;
+  const complexityBarWidthPct = Math.max(
+    0,
+    Math.min(100, (complexityScoreVal / 30) * 100)
   );
 
   return (
@@ -183,7 +188,7 @@ export function CodeHealthGauge({ t, lang, health }: CodeHealthGaugeProps) {
                   {t.healthCommentScoreLabel}
                 </span>
                 <span className="font-mono font-semibold text-slate-100 tabular-nums">
-                  {formatNumber(health.commentScore, lang)} / {formatNumber(50, lang)}
+                  {formatNumber(health.commentScore, lang)} / {formatNumber(35, lang)}
                 </span>
               </div>
               <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
@@ -215,7 +220,7 @@ export function CodeHealthGauge({ t, lang, health }: CodeHealthGaugeProps) {
                   {t.healthFileSizeScoreLabel}
                 </span>
                 <span className="font-mono font-semibold text-slate-100 tabular-nums">
-                  {formatNumber(health.fileSizeScore, lang)} / {formatNumber(50, lang)}
+                  {formatNumber(health.fileSizeScore, lang)} / {formatNumber(35, lang)}
                 </span>
               </div>
               <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
@@ -242,6 +247,31 @@ export function CodeHealthGauge({ t, lang, health }: CodeHealthGaugeProps) {
                 </div>
               </div>
             </div>
+
+            {/* Component 3: Cyclomatic Complexity */}
+            {health.complexity && (
+              <div className="border-t border-slate-800/80 pt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-slate-300">
+                    {t.healthComplexityScoreLabel}
+                  </span>
+                  <span className="font-mono font-semibold text-slate-100 tabular-nums">
+                    {formatNumber(complexityScoreVal, lang)} / {formatNumber(30, lang)}
+                  </span>
+                </div>
+                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className={`h-full rounded-full ${tier.barClass}`}
+                    style={{ width: `${complexityBarWidthPct}%` }}
+                  />
+                </div>
+                <div className="mt-1.5 text-[11px] text-slate-400 tabular-nums">
+                  {t.healthComplexityAvgSub
+                    .replace('{avg}', formatNumber(health.complexity.avgComplexity, lang))
+                    .replace('{files}', formatNumber(health.complexity.logicFilesCount, lang))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

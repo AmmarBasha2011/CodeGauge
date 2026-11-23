@@ -64,6 +64,12 @@ export function Header({
                 {t.navLanguages}
               </a>
               <a
+                href="#complexity"
+                className="hover:text-slate-100 transition-colors whitespace-nowrap shrink-0 py-1 border-b border-transparent hover:border-slate-500"
+              >
+                {t.navComplexity}
+              </a>
+              <a
                 href="#files"
                 className="hover:text-slate-100 transition-colors whitespace-nowrap shrink-0 py-1 border-b border-transparent hover:border-slate-500"
               >

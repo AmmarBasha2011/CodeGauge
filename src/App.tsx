@@ -10,11 +10,14 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityHistory } from './components/ActivityHistory.tsx';
+import { CodeHotspotTreemap } from './components/CodeHotspotTreemap.tsx';
+import { ComplexityInsights } from './components/ComplexityInsights.tsx';
 import {
   FileExplorer,
   type FileFilterState,
 } from './components/FileExplorer.tsx';
 import { Header } from './components/Header.tsx';
+import { KpiCardHeader } from './components/KpiCardHeader.tsx';
 import { LanguageBreakdown } from './components/LanguageBreakdown.tsx';
 import { OfflineIndicator } from './components/OfflineIndicator.tsx';
 import { PdfReportSheet } from './components/PdfReportSheet.tsx';
@@ -654,9 +657,10 @@ export default function App() {
               {/* 4-Column KPI Strip (single elevation cards) */}
               <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-slate-800/80 bg-[#111827] p-5">
-                  <div className="text-xs font-medium text-slate-400">
-                    {t.kpiTotalLines}
-                  </div>
+                  <KpiCardHeader
+                    label={t.kpiTotalLines}
+                    tooltip={t.kpiTooltipTotalLines}
+                  />
                   <div className="mt-1.5 font-mono text-2xl font-bold text-slate-50 tabular-nums">
                     {formatNumber(result.summary.totalLines, lang)}
                   </div>
@@ -668,9 +672,10 @@ export default function App() {
                 </div>
 
                 <div className="rounded-xl border border-slate-800/80 bg-[#111827] p-5">
-                  <div className="text-xs font-medium text-slate-400">
-                    {t.kpiLanguages}
-                  </div>
+                  <KpiCardHeader
+                    label={t.kpiLanguages}
+                    tooltip={t.kpiTooltipLanguages}
+                  />
                   <div className="mt-1.5 font-mono text-2xl font-bold text-slate-50 tabular-nums">
                     {formatNumber(result.summary.languageCount, lang)}
                   </div>
@@ -682,9 +687,11 @@ export default function App() {
                 </div>
 
                 <div className="rounded-xl border border-slate-800/80 bg-[#111827] p-5">
-                  <div className="text-xs font-medium text-slate-400">
-                    {t.kpiAnalyzedFiles}
-                  </div>
+                  <KpiCardHeader
+                    label={t.kpiAnalyzedFiles}
+                    tooltip={t.kpiTooltipAnalyzedFiles}
+                    align="end"
+                  />
                   <div className="mt-1.5 font-mono text-2xl font-bold text-slate-50 tabular-nums">
                     {formatNumber(result.summary.analyzedFiles, lang)}
                   </div>
@@ -700,9 +707,11 @@ export default function App() {
                 </div>
 
                 <div className="rounded-xl border border-slate-800/80 bg-[#111827] p-5">
-                  <div className="text-xs font-medium text-slate-400">
-                    {t.kpiTotalSize}
-                  </div>
+                  <KpiCardHeader
+                    label={t.kpiTotalSize}
+                    tooltip={t.kpiTooltipTotalSize}
+                    align="end"
+                  />
                   <div className="mt-1.5 font-mono text-2xl font-bold text-slate-50 tabular-nums">
                     {formatBytes(result.summary.totalSizeBytes)}
                   </div>
@@ -783,12 +792,42 @@ export default function App() {
                 totalLines={inspectedResult.summary.totalLines}
                 selectedLanguage={filters.language}
                 languageHistory={inspectedResult.languageHistory}
+                languageAdoption={inspectedResult.languageAdoption}
                 onSelectLanguage={(selectedLang) =>
                   setFilters((prev) => ({
                     ...prev,
                     language: selectedLang,
                   }))
                 }
+              />
+            )}
+
+            {/* Cyclomatic Complexity & Refactoring Recommendations */}
+            {inspectedResult && headerHealth?.complexity && (
+              <ComplexityInsights
+                t={t}
+                lang={lang}
+                complexity={headerHealth.complexity}
+              />
+            )}
+
+            {/* Code Hotspot Directory Density & Complexity Treemap */}
+            {inspectedResult && (
+              <CodeHotspotTreemap
+                t={t}
+                lang={lang}
+                repoName={inspectedResult.repository.name}
+                files={inspectedResult.files}
+                onInspectInExplorer={(filePath) => {
+                  setFilters({
+                    ...INITIAL_FILTERS,
+                    query: filePath,
+                    searchScope: 'path',
+                  });
+                  document
+                    .getElementById('files')
+                    ?.scrollIntoView({ behavior: 'smooth' });
+                }}
               />
             )}
 
